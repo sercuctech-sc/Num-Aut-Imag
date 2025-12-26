@@ -30,7 +30,7 @@
     (async function main(){
       try{
         // Indirizzo del modello .onnx
-        const modelUrl = 'const modelUrl = './models/yolov8n.onnx';';
+        const modelUrl = "https://cdn.jsdelivr.net/gh/ultralytics/assets@v0.0.0/yolov8n.onnx";
 
         // Forziamo il caricamento del runtime wasm dal CDN jsDelivr
         if (typeof ort !== 'undefined' && ort.env && ort.env.wasm) {
