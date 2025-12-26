@@ -30,11 +30,10 @@
 
     (async function main(){
       try{
-        // Indirizzo del modello: imposta qui il percorso reale al tuo .onnx
+        // Indirizzo del modello: impostato su Ultralytics release per YOLOv8n
         const modelUrl = 'https://cdn.jsdelivr.net/gh/ultralytics/assets@v0.0.0/yolov8n.onnx';
 
         // Forziamo il caricamento del runtime wasm dal CDN jsDelivr per evitare problemi di headers/Content-Type
-        // (ad esempio quando il .wasm veniva preso da raw.githubusercontent che restituisce header non corretti)
         if (typeof ort !== 'undefined' && ort.env && ort.env.wasm) {
           // path al file ort-wasm.wasm sul CDN jsDelivr
           ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/wasm/ort-wasm.wasm';
@@ -47,7 +46,7 @@
         try{
           log('Tentativo di creare sessione con backend WASM...');
           const session = await ort.InferenceSession.create(modelUrl, {executionProviders: ['wasm']});
-          log'Sessione creata (wasm):', session);
+          log('Sessione creata (wasm):', session);
           alert('Model caricato con successo usando backend WASM.');
         } catch (wasmErr) {
           log('Errore backend WASM:', wasmErr);
