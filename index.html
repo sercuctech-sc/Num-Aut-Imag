@@ -31,7 +31,7 @@
     (async function main(){
       try{
         // Indirizzo del modello: imposta qui il percorso reale al tuo .onnx
-        const modelUrl = 'https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.onnx';
+        const modelUrl = 'https://cdn.jsdelivr.net/gh/ultralytics/assets@v0.0.0/yolov8n.onnx';
 
         // Forziamo il caricamento del runtime wasm dal CDN jsDelivr per evitare problemi di headers/Content-Type
         // (ad esempio quando il .wasm veniva preso da raw.githubusercontent che restituisce header non corretti)
