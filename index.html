@@ -1,25 +1,106 @@
-<script>
-const logEl = document.getElementById('log');
-function log(...a){
-  console.log(...a);
-  logEl.textContent += a.join(' ') + '\n';
-}
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Num-Aut-Imag — ORT test</title>
 
-(async()=>{
-  const modelUrl = 'https://cdn.jsdelivr.net/gh/ultralytics/assets@v0.0.0/yolov8n.onnx';
+  <!-- ✅ CONSIGLIO: per evitare “pagina bianca”, NON usare <base>.
+       Su GitHub Pages funziona lo stesso se usi URL assoluti per CDN e modello. -->
 
-  ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
-  ort.env.wasm.simd = false;      // <<< BLOCCO SIMD
-  ort.env.wasm.numThreads = 1;    // <<< BLOCCO MULTI THREAD
+  <style>
+    body { font-family: Roboto, Arial, sans-serif; padding: 16px; }
+    .box { padding:12px; border:1px solid #ddd; border-radius:10px; margin:12px 0; }
+    pre { background:#f5f5f5; padding:12px; border-radius:10px; white-space:pre-wrap; overflow:auto; }
+    .ok { color: #0a7a1f; font-weight:700; }
+    .bad { color: #8b0000; font-weight:700; }
+    button { padding:10px 12px; border-radius:10px; border:1px solid #ccc; background:#fff; }
+  </style>
+</head>
 
-  try{
-    log("Avvio backend WASM compatibile Android...");
-    const session = await ort.InferenceSession.create(modelUrl,{executionProviders:['wasm']});
-    log("SESSIONE OK");
-    alert("MODELLO YOLOv8 CARICATO SU ANDROID ✔");
-  }catch(e){
-    log("ERRORE:",e);
-    alert("ERRORE ANDROID: " + e);
-  }
-})();
-</script>
+<body>
+  <h1>Num-Aut-Imag — Test ONNX Runtime Web</h1>
+
+  <div class="box" id="status">
+    Stato: <span id="state">Pagina caricata ✅</span>
+  </div>
+
+  <button id="btn">▶ Avvia test (carica modello)</button>
+
+  <pre id="log">Log pronto…\n</pre>
+
+  <!-- ORT -->
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+
+  <script>
+    const logEl = document.getElementById('log');
+    const stateEl = document.getElementById('state');
+    const statusBox = document.getElementById('status');
+
+    function log(...args){
+      console.log(...args);
+      logEl.textContent += args.map(x => {
+        if (x instanceof Error) return (x.stack || x.message || String(x));
+        if (typeof x === 'object') return JSON.stringify(x, null, 2);
+        return String(x);
+      }).join(' ') + '\n';
+    }
+
+    // ✅ cattura errori che altrimenti causano “pagina bianca”
+    window.addEventListener('error', (e) => {
+      statusBox.className = "box";
+      stateEl.className = "bad";
+      stateEl.textContent = "ERRORE JS (vedi log sotto)";
+      log("window.error:", e.message, e.filename + ":" + e.lineno + ":" + e.colno);
+      if (e.error) log(e.error);
+    });
+
+    window.addEventListener('unhandledrejection', (e) => {
+      statusBox.className = "box";
+      stateEl.className = "bad";
+      stateEl.textContent = "PROMISE REJECT (vedi log sotto)";
+      log("unhandledrejection:", e.reason);
+    });
+
+    async function runTest(){
+      try{
+        stateEl.className = "";
+        stateEl.textContent = "Avvio test…";
+
+        if (!window.ort) {
+          throw new Error("ort non caricato. CDN bloccato o offline.");
+        }
+
+        // ✅ FIX ANDROID: niente SIMD, niente multi-thread
+        ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
+        ort.env.wasm.simd = false;
+        ort.env.wasm.numThreads = 1;
+
+        log("ORT ok. wasmPaths:", ort.env.wasm.wasmPaths);
+        log("Android-safe: simd=false, threads=1");
+
+        // modello test
+        const modelUrl = "https://cdn.jsdelivr.net/gh/ultralytics/assets@v0.0.0/yolov8n.onnx";
+        log("Carico modello:", modelUrl);
+
+        const session = await ort.InferenceSession.create(modelUrl, { executionProviders: ["wasm"] });
+
+        log("✅ Sessione creata!");
+        log("Inputs:", session.inputNames);
+        log("Outputs:", session.outputNames);
+
+        stateEl.className = "ok";
+        stateEl.textContent = "OK ✅ Modello caricato (WASM Android-safe)";
+        alert("OK ✅ Modello caricato!");
+      } catch (e) {
+        stateEl.className = "bad";
+        stateEl.textContent = "KO ❌ (vedi log)";
+        log("❌ ERRORE:", e);
+        alert("Errore: " + (e?.message || e));
+      }
+    }
+
+    document.getElementById('btn').addEventListener('click', runTest);
+  </script>
+</body>
+</html>
