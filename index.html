@@ -3,77 +3,132 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Num-Aut-Imag - ONNX Runtime Web (fix wasm)</title>
+  <title>Num-Aut-Imag — Test ONNX Runtime Web</title>
+
+  <!-- GitHub Pages project: /Num-Aut-Imag/ -->
   <base href="/Num-Aut-Imag/">
+
   <style>
-    body { font-family: Roboto, Arial, sans-serif; padding: 1rem; }
-    pre { background:#f5f5f5; padding:1rem; border-radius:6px; }
-    .error { color: #8b0000; }
+    body { font-family: Roboto, Arial, sans-serif; padding: 16px; }
+    h1 { margin: 0 0 10px; }
+    .box { padding:12px; border:1px solid #ddd; border-radius:12px; margin:12px 0; }
+    pre { background:#f5f5f5; padding:12px; border-radius:12px; white-space:pre-wrap; overflow:auto; }
+    button { padding:10px 12px; border-radius:12px; border:1px solid #ccc; background:#fff; font-size:16px; }
+    .ok { color:#0a7a1f; font-weight:700; }
+    .bad { color:#8b0000; font-weight:700; }
+    code { background:#f3f3f3; padding:2px 6px; border-radius:6px; }
   </style>
 </head>
+
 <body>
-  <h1>Num-Aut-Imag — Test ONNX Runtime Web (fix wasm)</h1>
-  <p>Questa pagina carica <code>onnxruntime-web</code> dal CDN e forza il caricamento del file .wasm corrispondente dal CDN.</p>
+  <h1>Num-Aut-Imag — Test ONNX Runtime Web</h1>
 
-  <p><b>Modifica <code>modelUrl</code> sotto</b> con il percorso appropriato al tuo modello .onnx (relativo alla repo o assoluto).</p>
-  <pre id="log"></pre>
+  <div class="box">
+    Stato: <span id="state">Pronto ✅</span>
+  </div>
 
-  <!-- ONNX Runtime Web (minified) from jsDelivr -->
+  <div class="box">
+    <button id="btn">▶ Avvia test (carica modello)</button>
+    <div style="margin-top:10px;">
+      Modello usato: <code id="modelPath">./yolov8n.onnx</code>
+    </div>
+  </div>
+
+  <pre id="log">Log pronto…\n</pre>
+
+  <!-- ONNX Runtime Web -->
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+
   <script>
     const logEl = document.getElementById('log');
-    function log(...args){
+    const stateEl = document.getElementById('state');
+    const modelPathEl = document.getElementById('modelPath');
+
+    function log(...args) {
       console.log(...args);
-      logEl.textContent += args.map(a=> (typeof a === 'object' ? JSON.stringify(a,null,2) : String(a))).join(' ') + '\n';
+      logEl.textContent += args.map(x => {
+        if (x instanceof Error) return (x.stack || x.message || String(x));
+        if (typeof x === 'object') return JSON.stringify(x, null, 2);
+        return String(x);
+      }).join(' ') + '\n';
     }
 
-    (async function main(){
-      try{
-        // Indirizzo del modello .onnx
-        const modelUrl = "https://cdn.jsdelivr.net/gh/ultralytics/assets@v0.0.0/yolov8n.onnx";
+    // ✅ evita "pagina bianca": mostra errori JS a schermo
+    window.addEventListener('error', (e) => {
+      stateEl.className = "bad";
+      stateEl.textContent = "Errore JS ❌ (vedi log)";
+      log("window.error:", e.message, (e.filename || "") + ":" + (e.lineno || "") + ":" + (e.colno || ""));
+      if (e.error) log(e.error);
+    });
 
-        // Forziamo il caricamento del runtime wasm dal CDN jsDelivr
-        if (typeof ort !== 'undefined' && ort.env && ort.env.wasm) {
-          ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/wasm/ort-wasm.wasm';
-          log('Impostato ort.env.wasm.wasmPaths su:', ort.env.wasm.wasmPaths);
-        } else {
-          log('onnxruntime-web non è stato caricato correttamente.');
-        }
+    window.addEventListener('unhandledrejection', (e) => {
+      stateEl.className = "bad";
+      stateEl.textContent = "Promise reject ❌ (vedi log)";
+      log("unhandledrejection:", e.reason);
+    });
 
-        // Proviamo prima backend WASM; fallback a WebGL
-        try{
-          log('Tentativo di creare sessione con backend WASM...');
-          const session = await ort.InferenceSession.create(modelUrl, {executionProviders: ['wasm']});
-          log('Sessione creata (wasm):', session);
-          alert('Model caricato con successo usando backend WASM.');
-        } catch (wasmErr) {
-          log('Errore backend WASM:', wasmErr);
-          try{
-            log('Tentativo fallback a WebGL...');
-            const session2 = await ort.InferenceSession.create(modelUrl, {executionProviders: ['webgl']});
-            log('Sessione creata (webgl):', session2);
-            alert('Model caricato con successo usando backend WebGL (fallback).');
-          } catch (webglErr) {
-            log('Errore fallback WebGL:', webglErr);
-            const userMessage = 'Errore caricamento modello: Nessun backend disponibile.';
-            log(userMessage);
-            alert(userMessage + '\nControlla Console e Network.');
-          }
+    async function runTest() {
+      try {
+        stateEl.className = "";
+        stateEl.textContent = "Avvio…";
+
+        if (!window.ort) throw new Error("onnxruntime-web non caricato (ort undefined).");
+
+        // ✅ WASM PATH CORRETTO: cartella dist/ (non un singolo file .wasm)
+        ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
+
+        // ✅ ANDROID SAFE: disattiva SIMD + multi-thread
+        ort.env.wasm.simd = false;
+        ort.env.wasm.numThreads = 1;
+
+        log("ORT OK");
+        log("wasmPaths:", ort.env.wasm.wasmPaths);
+        log("Android-safe: simd=false, threads=1");
+
+        // ✅ MODELLO LOCALE (DEVE ESSERE NELLA TUA REPO)
+        // Metti yolov8n.onnx nella stessa cartella di index.html
+        const modelUrl = "./yolov8n.onnx";
+        modelPathEl.textContent = modelUrl;
+        log("Carico modello:", modelUrl);
+
+        // piccola verifica: prova a fetchare il file per vedere se esiste davvero
+        const resp = await fetch(modelUrl, { cache: "no-store" });
+        if (!resp.ok) {
+          throw new Error("Modello non trovato: " + modelUrl + " (HTTP " + resp.status + "). " +
+            "Carica yolov8n.onnx nella repo, stessa cartella di index.html.");
         }
+        log("Modello trovato ✅ (fetch OK)");
+
+        // crea sessione
+        const session = await ort.InferenceSession.create(modelUrl, { executionProviders: ["wasm"] });
+
+        log("✅ Sessione creata!");
+        log("Inputs:", session.inputNames);
+        log("Outputs:", session.outputNames);
+
+        stateEl.className = "ok";
+        stateEl.textContent = "OK ✅ Modello caricato (WASM Android-safe)";
+        alert("OK ✅ Modello caricato!");
       } catch (e) {
-        log('Errore inaspettato durante l\'avvio:', e);
-        alert('Errore inaspettato (vedi console).');
+        stateEl.className = "bad";
+        stateEl.textContent = "KO ❌ (vedi log)";
+        log("❌ ERRORE:", e);
+        alert("Errore: " + (e?.message || e));
       }
-    })();
+    }
+
+    document.getElementById("btn").addEventListener("click", runTest);
   </script>
 
   <hr />
-  <p class="error">Note:
+
+  <div class="box">
+    <div class="bad">Note importanti:</div>
     <ul>
-      <li>Assicurati che il file .onnx sia accessibile sulla rete.</li>
-      <li>Se usi un link raw di GitHub, assicurati che i permessi CORS siano corretti.</li>
-      <li>Altrimenti carica il file nella tua repo e usa un percorso relativo.</li>
+      <li><b>Devi caricare</b> <code>yolov8n.onnx</code> nella tua repo, <b>stessa cartella</b> di <code>index.html</code>.</li>
+      <li>Se vedi KO, guarda il <b>log</b>: ti dirà se è 404 (file mancante) o altro.</li>
+      <li>Su Android teniamo <code>simd=false</code> e <code>threads=1</code> per massima compatibilità.</li>
     </ul>
-  </p>
+  </div>
 </body>
 </html>
