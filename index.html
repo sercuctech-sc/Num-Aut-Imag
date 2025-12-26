@@ -3,328 +3,82 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>YOLOv8 (ONNX) - Rilevamento e numerazione progressiva</title>
+  <title>Num-Aut-Imag - ONNX Runtime Web (fix wasm)</title>
+  <!-- If this is a project pages site (https://sercuctech-sc.github.io/Num-Aut-Imag/) keep the base: -->
+  <base href="/Num-Aut-Imag/">
   <style>
-    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; padding: 20px; }
-    #controls { margin-bottom: 12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-    canvas { border:1px solid #ddd; max-width:100%; height:auto; }
-    .btn { padding:8px 12px; border-radius:6px; background:#0366d6; color:white; cursor:pointer; border:none; }
-    .btn:disabled { opacity:0.5 }
-    label { display:flex; gap:6px; align-items:center; }
-    #log { margin-top:12px; white-space:pre-wrap; color:#444; }
+    body { font-family: Roboto, Arial, sans-serif; padding: 1rem; }
+    pre { background:#f5f5f5; padding:1rem; border-radius:6px; }
+    .error { color: #8b0000; }
   </style>
 </head>
 <body>
-  <h1>YOLOv8 (ONNX) — Scansiona immagine e aggiunge numerini progressivi</h1>
+  <h1>Num-Aut-Imag — Test ONNX Runtime Web (fix wasm)</h1>
+  <p>Questa pagina carica <code>onnxruntime-web</code> dal CDN e forza il caricamento del file .wasm corrispondente dal CDN (risolve problemi di Content-Type / headers quando i file venivano serviti da raw.githubusercontent o percorsi errati).</p>
 
-  <div id="controls">
-    <input id="file" type="file" accept="image/*" />
-    <label>Modello ONNX:
-      <input id="modelPath" type="text" value="yolov8n.onnx" style="width:260px" />
-    </label>
-    <label>Input size:
-      <input id="inputSize" type="number" value="640" min="320" step="64" style="width:80px" />
-    </label>
-    <label>Soglia conf:
-      <input id="confThresh" type="number" value="0.25" min="0" max="1" step="0.01" style="width:80px" />
-    </label>
-    <label>NMS IoU:
-      <input id="iouThresh" type="number" value="0.45" min="0" max="1" step="0.01" style="width:80px" />
-    </label>
-    <button id="loadModel" class="btn">Carica modello</button>
-    <button id="run" class="btn" disabled>Esegui rilevamento</button>
-  </div>
+  <p>Modifica <code>modelUrl</code> sotto con il percorso al tuo modello .onnx (relativo alla repo o assoluto).</p>
+  <pre id="log"></pre>
 
-  <div>
-    <canvas id="canvas"></canvas>
-  </div>
-
-  <div id="log"></div>
-
-  <!-- onnxruntime-web from CDN -->
+  <!-- ONNX Runtime Web (minified) from jsDelivr -->
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
-
   <script>
-  // index.html — YOLOv8 ONNX in browser (WASM) + postprocessing + disegno numeri progressivi
-  // NOTE: mettere il file .onnx (es. yolov8n.onnx) nella stessa cartella o impostare un URL accessibile con CORS.
-  // Eseguire tramite server HTTP locale (es. `python -m http.server 8000`) per evitare problemi di caricamento WASM/CORS.
-
-  const fileInput = document.getElementById('file');
-  const canvas = document.getElementById('canvas');
-  const ctx = canvas.getContext('2d');
-  const loadModelBtn = document.getElementById('loadModel');
-  const runBtn = document.getElementById('run');
-  const modelPathEl = document.getElementById('modelPath');
-  const inputSizeEl = document.getElementById('inputSize');
-  const confThreshEl = document.getElementById('confThresh');
-  const iouThreshEl = document.getElementById('iouThresh');
-  const logEl = document.getElementById('log');
-
-  let img = new Image();
-  let model = null;
-  let ortSession = null;
-
-  function log(msg) {
-    logEl.textContent = msg + "\n" + logEl.textContent;
-  }
-
-  // Carica immagine selezionata
-  fileInput.addEventListener('change', (ev) => {
-    const f = ev.target.files && ev.target.files[0];
-    if (!f) return;
-    const url = URL.createObjectURL(f);
-    img = new Image();
-    img.onload = () => {
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      ctx.drawImage(img, 0, 0);
-      runBtn.disabled = !ortSession; // abilita run se modello già caricato
-    };
-    img.src = url;
-  });
-
-  // Setup ONNX Runtime WASM path (CDN)
-  ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort-wasm.wasm';
-
-  // Carica il modello ONNX (path o URL)
-  loadModelBtn.addEventListener('click', async () => {
-    const modelPath = modelPathEl.value.trim();
-    if (!modelPath) {
-      alert('Inserisci il percorso del modello ONNX (es: yolov8n.onnx).');
-      return;
+    const logEl = document.getElementById('log');
+    function log(...args){
+      console.log(...args);
+      logEl.textContent += args.map(a=> (typeof a === 'object' ? JSON.stringify(a,null,2) : String(a))).join(' ') + '\n';
     }
-    try {
-      loadModelBtn.disabled = true;
-      log('Caricamento modello...');
-      // Forza provider wasm per compatibilità nel browser:
-      ortSession = await ort.InferenceSession.create(modelPath, { executionProviders: ['wasm'] });
-      log('Modello caricato: ' + modelPath);
-      runBtn.disabled = !img.src;
-    } catch (err) {
-      console.error(err);
-      alert('Errore caricamento modello: ' + err);
-    } finally {
-      loadModelBtn.disabled = false;
-    }
-  });
 
-  runBtn.addEventListener('click', async () => {
-    if (!ortSession) return alert('Carica prima il modello ONNX.');
-    if (!img || !img.src) return alert('Carica prima un\'immagine.');
-    runBtn.disabled = true;
-    try {
-      const inputSize = parseInt(inputSizeEl.value, 10) || 640;
-      const confThresh = parseFloat(confThreshEl.value) || 0.25;
-      const iouThresh = parseFloat(iouThreshEl.value) || 0.45;
-      log('Preprocessing immagine...');
-      const {tensor, ratio, pad} = preprocess(img, inputSize);
-      log('Esecuzione inference...');
-      const feeds = {};
-      // Molti modelli ONNX YOLOv8 aspettano input name "images" o "input". Cerchiamo il primo input disponibile.
-      const inputName = ortSession.inputNames[0];
-      feeds[inputName] = tensor;
-      const results = await ortSession.run(feeds);
-      // Prendiamo la prima uscita
-      const outputName = ortSession.outputNames[0];
-      const output = results[outputName];
-      log('Postprocessing risultati...');
-      const detections = parseYoloOutput(output, confThresh, inputSize, ratio, pad, img.naturalWidth, img.naturalHeight);
-      const final = nonMaxSuppression(detections, iouThresh);
-      log(`Trovati ${final.length} oggetti (dopo NMS). Disegno risultati...`);
-      drawDetections(final);
-    } catch (err) {
-      console.error(err);
-      alert('Errore durante il rilevamento: ' + err);
-    } finally {
-      runBtn.disabled = false;
-    }
-  });
+    (async function main(){
+      try{
+        // Indirizzo del modello: imposta qui il percorso reale al tuo .onnx
+        const modelUrl = './model.onnx';
 
-  // Preprocess: letterbox + normalize + HWC->CHW
-  function preprocess(image, modelSize) {
-    // Calcola scala mantenendo aspect ratio + padding (letterbox) come fa YOLOv8
-    const w = image.naturalWidth;
-    const h = image.naturalHeight;
-    const r = Math.min(modelSize / w, modelSize / h);
-    const nw = Math.round(w * r);
-    const nh = Math.round(h * r);
-    const dx = Math.floor((modelSize - nw) / 2);
-    const dy = Math.floor((modelSize - nh) / 2);
-
-    // canvas temporaneo per ridimensionare
-    const tmp = document.createElement('canvas');
-    tmp.width = modelSize;
-    tmp.height = modelSize;
-    const tctx = tmp.getContext('2d');
-    // fill with gray (as letterbox)
-    tctx.fillStyle = '#808080';
-    tctx.fillRect(0, 0, modelSize, modelSize);
-    // draw resized image centered
-    tctx.drawImage(image, 0, 0, w, h, dx, dy, nw, nh);
-
-    // get image data
-    const id = tctx.getImageData(0, 0, modelSize, modelSize);
-    const data = id.data; // Uint8ClampedArray RGBA
-
-    // allocate float32 and convert to CHW normalized [0,1]
-    const floatData = new Float32Array(1 * 3 * modelSize * modelSize);
-    // HWC->CHW loop
-    let rIdx = 0, gIdx = modelSize*modelSize, bIdx = 2*modelSize*modelSize;
-    for (let i = 0; i < data.length; i += 4) {
-      const R = data[i] / 255;
-      const G = data[i + 1] / 255;
-      const B = data[i + 2] / 255;
-      floatData[rIdx++] = R;
-      floatData[gIdx++] = G;
-      floatData[bIdx++] = B;
-    }
-    const tensor = new ort.Tensor('float32', floatData, [1, 3, modelSize, modelSize]);
-    return { tensor, ratio: r, pad: {dx, dy} };
-  }
-
-  // Parse output typicale YOLOv8 ONNX: [1, N, 85] => cx,cy,w,h,conf,cls0,...clsN
-  function parseYoloOutput(outputTensor, confThreshold, modelSize, ratio, pad, origW, origH) {
-    // outputTensor.data is Float32Array; outputTensor.dims like [1,N,85] or [N,85]
-    const data = outputTensor.data;
-    const dims = outputTensor.dims;
-    let N = dims[dims.length - 2];
-    let C = dims[dims.length - 1]; // e.g., 85
-    // Ensure we can iterate rows
-    const stride = C;
-    const detections = [];
-    for (let i = 0; i < N; i++) {
-      const offset = i * stride;
-      const cx = data[offset];
-      const cy = data[offset + 1];
-      const w = data[offset + 2];
-      const h = data[offset + 3];
-      const objectness = data[offset + 4];
-      // find best class score
-      let bestClass = -1;
-      let bestScore = 0;
-      for (let c = 5; c < C; c++) {
-        const score = data[offset + c];
-        if (score > bestScore) {
-          bestScore = score;
-          bestClass = c - 5;
+        // Forziamo il caricamento del runtime wasm dal CDN jsDelivr per evitare problemi di headers/Content-Type
+        // (ad esempio quando il .wasm veniva preso da raw.githubusercontent che restituisce header non corretti)
+        if (typeof ort !== 'undefined' && ort.env && ort.env.wasm) {
+          // path al file ort-wasm.wasm sul CDN jsDelivr
+          ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/wasm/ort-wasm.wasm';
+          log('Impostato ort.env.wasm.wasmPaths su:', ort.env.wasm.wasmPaths);
+        } else {
+          log('onnxruntime-web non è stato caricato correttamente.');
         }
+
+        // Proviamo prima il backend WASM; se fallisce useremo WebGL come fallback
+        try{
+          log('Tentativo di creare sessione con backend WASM...');
+          const session = await ort.InferenceSession.create(modelUrl, {executionProviders: ['wasm']});
+          log('Sessione creata (wasm):', session);
+          alert('Model caricato con successo usando backend WASM.');
+        } catch (wasmErr) {
+          log('Errore backend WASM:', wasmErr);
+          // fallback a WebGL
+          try{
+            log('Tentativo fallback a WebGL...');
+            const session2 = await ort.InferenceSession.create(modelUrl, {executionProviders: ['webgl']});
+            log('Sessione creata (webgl):', session2);
+            alert('Model caricato con successo usando backend WebGL (fallback).');
+          } catch (webglErr) {
+            log('Errore fallback WebGL:', webglErr);
+            // Mostriamo un messaggio amichevole in italiano
+            const userMessage = 'Errore caricamento modello: Nessun backend disponibile. Dettagli console.';
+            log(userMessage);
+            alert(userMessage + '\nControlla la Console (DevTools) e la tab Network per richieste .wasm/.onnx fallite (404/403/CORS).');
+          }
+        }
+      } catch (e) {
+        log('Errore inaspettato durante l\'avvio:', e);
+        alert('Errore inaspettato (vedi console).');
       }
-      const conf = objectness * bestScore;
-      if (conf < confThreshold) continue;
-      // convert from model coords to original image coords
-      // The model coords are relative to the modelSize image (no normalization). Assumiamo che cx,cy,w,h siano in pixel del modelSize (se il modello è esportato così).
-      // Map: remove pad and divide by ratio
-      const x1 = (cx - w/2 - pad.dx) / ratio;
-      const y1 = (cy - h/2 - pad.dy) / ratio;
-      const x2 = (cx + w/2 - pad.dx) / ratio;
-      const y2 = (cy + h/2 - pad.dy) / ratio;
-
-      // clamp
-      const bbox = [
-        Math.max(0, x1),
-        Math.max(0, y1),
-        Math.min(origW, x2),
-        Math.min(origH, y2)
-      ];
-
-      detections.push({
-        bbox, // [x1,y1,x2,y2]
-        score: conf,
-        classId: bestClass
-      });
-    }
-    return detections;
-  }
-
-  // Simple NMS (boxes in [x1,y1,x2,y2])
-  function nonMaxSuppression(detections, iouThreshold = 0.45) {
-    if (detections.length === 0) return [];
-    // sort by score desc
-    const dets = detections.slice().sort((a,b) => b.score - a.score);
-    const keep = [];
-    const used = new Array(dets.length).fill(false);
-    for (let i = 0; i < dets.length; i++) {
-      if (used[i]) continue;
-      const a = dets[i];
-      keep.push(a);
-      for (let j = i+1; j < dets.length; j++) {
-        if (used[j]) continue;
-        const b = dets[j];
-        if (iou(a.bbox, b.bbox) > iouThreshold) used[j] = true;
-      }
-    }
-    return keep;
-  }
-
-  function iou(boxA, boxB) {
-    const [ax1, ay1, ax2, ay2] = boxA;
-    const [bx1, by1, bx2, by2] = boxB;
-    const interX1 = Math.max(ax1, bx1);
-    const interY1 = Math.max(ay1, by1);
-    const interX2 = Math.min(ax2, bx2);
-    const interY2 = Math.min(ay2, by2);
-    const iw = Math.max(0, interX2 - interX1);
-    const ih = Math.max(0, interY2 - interY1);
-    const inter = iw * ih;
-    const aArea = Math.max(0, ax2-ax1) * Math.max(0, ay2-ay1);
-    const bArea = Math.max(0, bx2-bx1) * Math.max(0, by2-by1);
-    return inter / (aArea + bArea - inter + 1e-9);
-  }
-
-  // Draw detections and add progressive numbers
-  function drawDetections(detections) {
-    // redraw original image
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    ctx.drawImage(img, 0, 0);
-    ctx.lineWidth = 2;
-    ctx.font = '18px Arial';
-    ctx.textBaseline = 'middle';
-    // choose colors
-    const colors = ['#FF3B30','#FF9500','#FFCC00','#4CD964','#5AC8FA','#007AFF','#5856D6','#FF2D55'];
-    // Sort detections by x,y or leave as is. We'll number simply 1..N in the order of detections array.
-    for (let i = 0; i < detections.length; i++) {
-      const det = detections[i];
-      const [x1,y1,x2,y2] = det.bbox;
-      const w = x2 - x1;
-      const h = y2 - y1;
-      const color = colors[i % colors.length];
-      // box
-      ctx.strokeStyle = color;
-      ctx.fillStyle = color;
-      ctx.strokeRect(x1, y1, w, h);
-      // circle with number (small filled)
-      const num = i + 1;
-      const radius = Math.max(12, Math.min(22, Math.floor(0.03 * Math.max(canvas.width, canvas.height))));
-      const cx = x1 + radius + 6;
-      const cy = y1 + radius + 6;
-      // draw circle with white border
-      ctx.beginPath();
-      ctx.fillStyle = color;
-      ctx.arc(cx, cy, radius, 0, 2*Math.PI);
-      ctx.fill();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = '#fff';
-      ctx.stroke();
-      // number
-      ctx.fillStyle = '#fff';
-      ctx.font = (radius) + 'px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText(String(num), cx, cy + 1);
-      // optional: draw confidence
-      const confText = (det.score*100).toFixed(1) + '%';
-      ctx.fillStyle = color;
-      ctx.font = '14px Arial';
-      ctx.textAlign = 'left';
-      // small label background
-      const labelX = x1;
-      const labelY = Math.max(0, y1 - 22);
-      ctx.fillRect(labelX, labelY, ctx.measureText(confText).width + 10, 20);
-      ctx.fillStyle = '#fff';
-      ctx.fillText(confText, labelX + 5, labelY + 12);
-    }
-  }
-
+    })();
   </script>
+
+  <hr />
+  <p class="error">Note:
+    <ul>
+      <li>Se pubblichi su GitHub Pages come progetto (username.github.io/Num-Aut-Imag) assicurati che i file .wasm/.onnx siano committati nella repo e referenziati usando percorsi relativi o usa il <code>&lt;base href="/Num-Aut-Imag/"&gt;</code> come sopra.</li>
+      <li>Se servi file .wasm da un altro dominio, assicurati che il server imposti <code>Content-Type: application/wasm</code> e <code>Access-Control-Allow-Origin</code> corretti.</li>
+      <li>In alternativa, usa jsDelivr per servire staticamente i file dal repo: <code>https://cdn.jsdelivr.net/gh/sercuctech-sc/Num-Aut-Imag/path/to/file.wasm</code></li>
+    </ul>
+  </p>
 </body>
 </html>
