@@ -3,37 +3,67 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Num-Aut-Imag — Test ONNX Runtime Web</title>
+  <title>Num-Aut-Imag — YOLOv8n ONNX (Android-safe)</title>
 
-  <!-- GitHub Pages project: /Num-Aut-Imag/ -->
+  <!-- GitHub Pages project -->
   <base href="/Num-Aut-Imag/">
 
   <style>
-    body { font-family: Roboto, Arial, sans-serif; padding: 16px; }
-    h1 { margin: 0 0 10px; }
-    .box { padding:12px; border:1px solid #ddd; border-radius:12px; margin:12px 0; }
-    pre { background:#f5f5f5; padding:12px; border-radius:12px; white-space:pre-wrap; overflow:auto; }
+    body { font-family: Roboto, Arial, sans-serif; padding: 14px; }
+    h1 { margin: 0 0 10px; font-size: 26px; }
+    .box { padding:12px; border:1px solid #ddd; border-radius:14px; margin:12px 0; }
+    pre { background:#f5f5f5; padding:12px; border-radius:14px; white-space:pre-wrap; overflow:auto; max-height: 220px; }
     button { padding:10px 12px; border-radius:12px; border:1px solid #ccc; background:#fff; font-size:16px; }
+    input[type="file"] { font-size:16px; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
     .ok { color:#0a7a1f; font-weight:700; }
     .bad { color:#8b0000; font-weight:700; }
+    label { font-size: 14px; color:#333; }
     code { background:#f3f3f3; padding:2px 6px; border-radius:6px; }
-    small { color:#555; }
+    canvas { width: 100%; height: auto; border-radius: 12px; background:#fafafa; border:1px solid #eee; }
+    .muted { color:#666; font-size: 13px; }
   </style>
 </head>
 
 <body>
-  <h1>Num-Aut-Imag — Test ONNX Runtime Web</h1>
+  <h1>Num-Aut-Imag — YOLOv8n ONNX</h1>
 
   <div class="box">
     Stato: <span id="state">Pronto ✅</span>
+    <div class="muted" style="margin-top:6px;">
+      Modello: <code id="modelPath">./yolov8n.onnx</code> (stessa cartella di index.html)
+    </div>
   </div>
 
   <div class="box">
-    <button id="btn">▶ Avvia test (carica modello)</button>
-    <div style="margin-top:10px;">
-      Modello usato: <code id="modelPath">./yolov8n.onnx</code><br/>
-      <small>(il file deve stare nella stessa cartella di questo index.html)</small>
+    <div class="row">
+      <button id="btnLoad">1) Carica modello</button>
+      <input type="file" id="imgInput" accept="image/*" disabled />
+      <button id="btnDetect" disabled>2) Analizza immagine</button>
+      <button id="btnClear">Pulisci</button>
     </div>
+
+    <div class="row" style="margin-top:10px;">
+      <label>
+        Confidenza:
+        <input type="range" id="conf" min="0.10" max="0.80" step="0.05" value="0.35" />
+        <span id="confVal">0.35</span>
+      </label>
+
+      <label>
+        NMS IoU:
+        <input type="range" id="iou" min="0.20" max="0.80" step="0.05" value="0.45" />
+        <span id="iouVal">0.45</span>
+      </label>
+    </div>
+
+    <p class="muted" style="margin:10px 0 0;">
+      Suggerimento: dopo “Carica modello”, scegli una foto, poi “Analizza immagine”.
+    </p>
+  </div>
+
+  <div class="box">
+    <canvas id="canvas"></canvas>
   </div>
 
   <pre id="log">Log pronto…\n</pre>
@@ -42,9 +72,25 @@
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
 
   <script>
-    const logEl = document.getElementById('log');
     const stateEl = document.getElementById('state');
+    const logEl = document.getElementById('log');
     const modelPathEl = document.getElementById('modelPath');
+
+    const btnLoad = document.getElementById('btnLoad');
+    const btnDetect = document.getElementById('btnDetect');
+    const btnClear = document.getElementById('btnClear');
+    const imgInput = document.getElementById('imgInput');
+
+    const confEl = document.getElementById('conf');
+    const iouEl = document.getElementById('iou');
+    const confValEl = document.getElementById('confVal');
+    const iouValEl = document.getElementById('iouVal');
+
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    confEl.addEventListener('input', () => confValEl.textContent = Number(confEl.value).toFixed(2));
+    iouEl.addEventListener('input', () => iouValEl.textContent = Number(iouEl.value).toFixed(2));
 
     function log(...args) {
       console.log(...args);
@@ -55,85 +101,337 @@
       }).join(' ') + '\n';
     }
 
-    // Anti "pagina bianca": mostra qualsiasi errore JS a schermo
+    // Anti pagina bianca
     window.addEventListener('error', (e) => {
       stateEl.className = "bad";
       stateEl.textContent = "Errore JS ❌ (vedi log)";
-      log("window.error:", e.message, (e.filename || "") + ":" + (e.lineno || "") + ":" + (e.colno || ""));
+      log("window.error:", e.message, (e.filename||"") + ":" + (e.lineno||"") + ":" + (e.colno||""));
       if (e.error) log(e.error);
     });
-
     window.addEventListener('unhandledrejection', (e) => {
       stateEl.className = "bad";
       stateEl.textContent = "Promise reject ❌ (vedi log)";
       log("unhandledrejection:", e.reason);
     });
 
-    async function runTest() {
+    // ---- Stato app ----
+    const MODEL_URL = "./yolov8n.onnx"; // locale repo
+    modelPathEl.textContent = MODEL_URL;
+
+    let session = null;
+    let currentImage = null; // HTMLImageElement
+    let currentImageURL = null;
+
+    // COCO 80 class names (YOLOv8n default)
+    const COCO = [
+      "person","bicycle","car","motorcycle","airplane","bus","train","truck","boat","traffic light",
+      "fire hydrant","stop sign","parking meter","bench","bird","cat","dog","horse","sheep","cow",
+      "elephant","bear","zebra","giraffe","backpack","umbrella","handbag","tie","suitcase","frisbee",
+      "skis","snowboard","sports ball","kite","baseball bat","baseball glove","skateboard","surfboard","tennis racket","bottle",
+      "wine glass","cup","fork","knife","spoon","bowl","banana","apple","sandwich","orange",
+      "broccoli","carrot","hot dog","pizza","donut","cake","chair","couch","potted plant","bed",
+      "dining table","toilet","tv","laptop","mouse","remote","keyboard","cell phone","microwave","oven",
+      "toaster","sink","refrigerator","book","clock","vase","scissors","teddy bear","hair drier","toothbrush"
+    ];
+
+    // ---- Utility: letterbox resize ----
+    function letterboxToSquare(img, target = 640) {
+      const iw = img.naturalWidth || img.width;
+      const ih = img.naturalHeight || img.height;
+
+      const scale = Math.min(target / iw, target / ih);
+      const nw = Math.round(iw * scale);
+      const nh = Math.round(ih * scale);
+
+      const padX = Math.floor((target - nw) / 2);
+      const padY = Math.floor((target - nh) / 2);
+
+      const off = document.createElement('canvas');
+      off.width = target;
+      off.height = target;
+      const octx = off.getContext('2d');
+
+      // sfondo nero (come YOLO letterbox classico)
+      octx.fillStyle = "black";
+      octx.fillRect(0, 0, target, target);
+      octx.drawImage(img, 0, 0, iw, ih, padX, padY, nw, nh);
+
+      return { canvas: off, scale, padX, padY, iw, ih, target, nw, nh };
+    }
+
+    // ---- Preprocess: canvas->Tensor float32 CHW RGB [1,3,640,640] ----
+    function canvasToTensorRGBCHW(cnv) {
+      const w = cnv.width, h = cnv.height;
+      const c = cnv.getContext('2d');
+      const { data } = c.getImageData(0, 0, w, h);
+
+      const float = new Float32Array(1 * 3 * w * h);
+      const hw = w * h;
+
+      // data RGBA -> float CHW RGB
+      for (let i = 0, px = 0; i < data.length; i += 4, px++) {
+        const r = data[i] / 255;
+        const g = data[i + 1] / 255;
+        const b = data[i + 2] / 255;
+        float[0 * hw + px] = r;           // R
+        float[1 * hw + px] = g;           // G
+        float[2 * hw + px] = b;           // B
+      }
+      return new ort.Tensor('float32', float, [1, 3, h, w]);
+    }
+
+    // ---- NMS ----
+    function iou(a, b) {
+      const x1 = Math.max(a.x1, b.x1);
+      const y1 = Math.max(a.y1, b.y1);
+      const x2 = Math.min(a.x2, b.x2);
+      const y2 = Math.min(a.y2, b.y2);
+      const w = Math.max(0, x2 - x1);
+      const h = Math.max(0, y2 - y1);
+      const inter = w * h;
+      const areaA = Math.max(0, a.x2 - a.x1) * Math.max(0, a.y2 - a.y1);
+      const areaB = Math.max(0, b.x2 - b.x1) * Math.max(0, b.y2 - b.y1);
+      return inter / (areaA + areaB - inter + 1e-9);
+    }
+
+    function nms(boxes, iouThresh) {
+      // boxes: [{score, ...}]
+      boxes.sort((a, b) => b.score - a.score);
+      const keep = [];
+      const removed = new Array(boxes.length).fill(false);
+
+      for (let i = 0; i < boxes.length; i++) {
+        if (removed[i]) continue;
+        const a = boxes[i];
+        keep.push(a);
+        for (let j = i + 1; j < boxes.length; j++) {
+          if (removed[j]) continue;
+          const b = boxes[j];
+          if (a.classId === b.classId && iou(a, b) > iouThresh) {
+            removed[j] = true;
+          }
+        }
+      }
+      return keep;
+    }
+
+    // ---- Postprocess YOLOv8: output (1,84,8400) -> boxes ----
+    function decodeYolov8(output, confThresh, iouThresh, letterInfo) {
+      // output: Float32Array
+      // dims expected: [1,84,8400] -> 84 = 4 + 80 classes
+      const numClasses = 80;
+      const stride = 4 + numClasses;
+      const numDet = output.length / stride;
+
+      const { scale, padX, padY, iw, ih, target } = letterInfo;
+
+      const boxes = [];
+      for (let i = 0; i < numDet; i++) {
+        const base = i * stride;
+
+        // YOLOv8 export often gives cx,cy,w,h in "pixels" on 640
+        const cx = output[base + 0];
+        const cy = output[base + 1];
+        const w  = output[base + 2];
+        const h  = output[base + 3];
+
+        // max class
+        let best = 0;
+        let classId = -1;
+        for (let c = 0; c < numClasses; c++) {
+          const s = output[base + 4 + c];
+          if (s > best) { best = s; classId = c; }
+        }
+        const score = best; // in molti export è già una conf/prob (0..1)
+        if (score < confThresh) continue;
+
+        // convert to x1y1x2y2 on 640 letterbox space
+        const x1 = cx - w / 2;
+        const y1 = cy - h / 2;
+        const x2 = cx + w / 2;
+        const y2 = cy + h / 2;
+
+        // map back to original image coords (remove padding then /scale)
+        const ox1 = (x1 - padX) / scale;
+        const oy1 = (y1 - padY) / scale;
+        const ox2 = (x2 - padX) / scale;
+        const oy2 = (y2 - padY) / scale;
+
+        // clamp
+        const bx1 = Math.max(0, Math.min(iw, ox1));
+        const by1 = Math.max(0, Math.min(ih, oy1));
+        const bx2 = Math.max(0, Math.min(iw, ox2));
+        const by2 = Math.max(0, Math.min(ih, oy2));
+
+        if ((bx2 - bx1) < 2 || (by2 - by1) < 2) continue;
+
+        boxes.push({ x1: bx1, y1: by1, x2: bx2, y2: by2, score, classId });
+      }
+
+      return nms(boxes, iouThresh);
+    }
+
+    // ---- Disegno risultati ----
+    function drawResults(img, dets) {
+      const iw = img.naturalWidth || img.width;
+      const ih = img.naturalHeight || img.height;
+
+      canvas.width = iw;
+      canvas.height = ih;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, iw, ih);
+
+      // stile testo
+      ctx.font = "24px Arial";
+      ctx.textBaseline = "top";
+
+      let n = 1;
+      for (const d of dets) {
+        // box
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = "red";
+        ctx.strokeRect(d.x1, d.y1, d.x2 - d.x1, d.y2 - d.y1);
+
+        // etichetta + numero
+        const label = `${n}) ${COCO[d.classId] || ("cls"+d.classId)} ${(d.score*100).toFixed(0)}%`;
+        const tx = d.x1;
+        const ty = Math.max(0, d.y1 - 28);
+
+        // background label
+        const metrics = ctx.measureText(label);
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillRect(tx, ty, metrics.width + 10, 28);
+
+        ctx.fillStyle = "white";
+        ctx.fillText(label, tx + 5, ty + 2);
+
+        n++;
+      }
+
+      // contatore
+      ctx.fillStyle = "rgba(0,0,0,0.5)";
+      ctx.fillRect(10, 10, 260, 36);
+      ctx.fillStyle = "white";
+      ctx.fillText(`Oggetti trovati: ${dets.length}`, 18, 14);
+    }
+
+    // ---- Load image from input ----
+    imgInput.addEventListener('change', () => {
+      const file = imgInput.files && imgInput.files[0];
+      if (!file) return;
+
+      if (currentImageURL) URL.revokeObjectURL(currentImageURL);
+      currentImageURL = URL.createObjectURL(file);
+
+      const img = new Image();
+      img.onload = () => {
+        currentImage = img;
+        // mostra preview
+        drawResults(img, []);
+        log("Immagine caricata:", file.name, `${img.naturalWidth}x${img.naturalHeight}`);
+        btnDetect.disabled = !session;
+      };
+      img.onerror = () => {
+        log("Errore caricamento immagine.");
+      };
+      img.src = currentImageURL;
+    });
+
+    // ---- Buttons ----
+    btnClear.addEventListener('click', () => {
+      logEl.textContent = "Log pronto…\n";
+      stateEl.className = "";
+      stateEl.textContent = "Pronto ✅";
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      canvas.width = 1; canvas.height = 1;
+      currentImage = null;
+      imgInput.value = "";
+      btnDetect.disabled = true;
+    });
+
+    btnLoad.addEventListener('click', async () => {
       try {
         stateEl.className = "";
-        stateEl.textContent = "Avvio…";
+        stateEl.textContent = "Carico modello…";
 
         if (!window.ort) throw new Error("onnxruntime-web non caricato (ort undefined).");
 
-        // ✅ WASM path corretto: cartella dist/ (non un singolo .wasm)
+        // Android-safe
         ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
-
-        // ✅ Android-safe: evita simd + multithreading (compatibilità massima)
         ort.env.wasm.simd = false;
         ort.env.wasm.numThreads = 1;
 
         log("ORT OK");
         log("wasmPaths:", ort.env.wasm.wasmPaths);
         log("Android-safe: simd=false, threads=1");
+        log("Controllo modello:", MODEL_URL);
 
-        // ✅ modello locale nella repo
-        const modelUrl = "./yolov8n.onnx";
-        modelPathEl.textContent = modelUrl;
-        log("Carico modello:", modelUrl);
-
-        // Verifica rapida che il file esista davvero
-        const resp = await fetch(modelUrl, { cache: "no-store" });
-        if (!resp.ok) {
-          throw new Error(
-            "Modello non trovato: " + modelUrl +
-            " (HTTP " + resp.status + "). " +
-            "Carica yolov8n.onnx nella repo, stessa cartella di index.html."
-          );
-        }
+        // verifica modello presente
+        const resp = await fetch(MODEL_URL, { cache: "no-store" });
+        if (!resp.ok) throw new Error(`Modello non trovato: ${MODEL_URL} (HTTP ${resp.status})`);
         log("Modello trovato ✅ (fetch OK)");
 
-        // ✅ FIX FINALE: lascia scegliere a ORT il provider migliore su Android
-        // (niente executionProviders esplicito)
-        log("Creo sessione ORT…");
-        const session = await ort.InferenceSession.create(modelUrl);
-
+        // crea sessione (lascia scegliere provider migliore)
+        session = await ort.InferenceSession.create(MODEL_URL);
         log("✅ Sessione creata!");
         log("Inputs:", session.inputNames);
         log("Outputs:", session.outputNames);
 
         stateEl.className = "ok";
-        stateEl.textContent = "OK ✅ Modello caricato (Android-safe)";
-        alert("OK ✅ Modello caricato!");
+        stateEl.textContent = "Modello OK ✅ Ora carica un'immagine";
+        imgInput.disabled = false;
+        btnDetect.disabled = !currentImage;
       } catch (e) {
         stateEl.className = "bad";
         stateEl.textContent = "KO ❌ (vedi log)";
         log("❌ ERRORE:", e);
         alert("Errore: " + (e?.message || e));
       }
-    }
+    });
 
-    document.getElementById("btn").addEventListener("click", runTest);
+    btnDetect.addEventListener('click', async () => {
+      try {
+        if (!session) throw new Error("Prima carica il modello.");
+        if (!currentImage) throw new Error("Prima scegli un'immagine.");
+
+        stateEl.className = "";
+        stateEl.textContent = "Analisi in corso…";
+
+        const confT = Number(confEl.value);
+        const iouT = Number(iouEl.value);
+
+        // preprocess letterbox
+        const letter = letterboxToSquare(currentImage, 640);
+        const inputTensor = canvasToTensorRGBCHW(letter.canvas);
+
+        // input/output names
+        const inputName = session.inputNames[0];   // di solito "images" o simile
+        const feeds = {};
+        feeds[inputName] = inputTensor;
+
+        const results = await session.run(feeds);
+        const outName = session.outputNames[0];
+        const out = results[outName];
+
+        if (!out || !out.data) throw new Error("Output vuoto dal modello.");
+
+        // decode
+        const dets = decodeYolov8(out.data, confT, iouT, letter);
+        log(`Detections dopo NMS: ${dets.length}`);
+
+        // draw
+        drawResults(currentImage, dets);
+
+        stateEl.className = "ok";
+        stateEl.textContent = `Fatto ✅ Oggetti: ${dets.length}`;
+      } catch (e) {
+        stateEl.className = "bad";
+        stateEl.textContent = "KO ❌ (vedi log)";
+        log("❌ ERRORE:", e);
+        alert("Errore: " + (e?.message || e));
+      }
+    });
   </script>
-
-  <hr />
-
-  <div class="box">
-    <div class="bad"><strong>Note importanti:</strong></div>
-    <ul>
-      <li>Devi avere <code>index.html</code> e <code>yolov8n.onnx</code> nella <strong>stessa cartella</strong> della repo.</li>
-      <li>Se vedi KO, guarda il log: ti dirà se è 404 (file mancante) o altro.</li>
-    </ul>
-  </div>
 </body>
 </html>
