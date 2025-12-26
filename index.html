@@ -47,7 +47,7 @@
         try{
           log('Tentativo di creare sessione con backend WASM...');
           const session = await ort.InferenceSession.create(modelUrl, {executionProviders: ['wasm']});
-          log('Sessione creata (wasm):', session);
+          log'Sessione creata (wasm):', session);
           alert('Model caricato con successo usando backend WASM.');
         } catch (wasmErr) {
           log('Errore backend WASM:', wasmErr);
