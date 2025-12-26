@@ -17,6 +17,7 @@
     .ok { color:#0a7a1f; font-weight:700; }
     .bad { color:#8b0000; font-weight:700; }
     code { background:#f3f3f3; padding:2px 6px; border-radius:6px; }
+    small { color:#555; }
   </style>
 </head>
 
@@ -30,7 +31,8 @@
   <div class="box">
     <button id="btn">▶ Avvia test (carica modello)</button>
     <div style="margin-top:10px;">
-      Modello usato: <code id="modelPath">./yolov8n.onnx</code>
+      Modello usato: <code id="modelPath">./yolov8n.onnx</code><br/>
+      <small>(il file deve stare nella stessa cartella di questo index.html)</small>
     </div>
   </div>
 
@@ -53,7 +55,7 @@
       }).join(' ') + '\n';
     }
 
-    // ✅ evita "pagina bianca": mostra errori JS a schermo
+    // Anti "pagina bianca": mostra qualsiasi errore JS a schermo
     window.addEventListener('error', (e) => {
       stateEl.className = "bad";
       stateEl.textContent = "Errore JS ❌ (vedi log)";
@@ -74,10 +76,10 @@
 
         if (!window.ort) throw new Error("onnxruntime-web non caricato (ort undefined).");
 
-        // ✅ WASM PATH CORRETTO: cartella dist/ (non un singolo file .wasm)
+        // ✅ WASM path corretto: cartella dist/ (non un singolo .wasm)
         ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
 
-        // ✅ ANDROID SAFE: disattiva SIMD + multi-thread
+        // ✅ Android-safe: evita simd + multithreading (compatibilità massima)
         ort.env.wasm.simd = false;
         ort.env.wasm.numThreads = 1;
 
@@ -85,29 +87,33 @@
         log("wasmPaths:", ort.env.wasm.wasmPaths);
         log("Android-safe: simd=false, threads=1");
 
-        // ✅ MODELLO LOCALE (DEVE ESSERE NELLA TUA REPO)
-        // Metti yolov8n.onnx nella stessa cartella di index.html
+        // ✅ modello locale nella repo
         const modelUrl = "./yolov8n.onnx";
         modelPathEl.textContent = modelUrl;
         log("Carico modello:", modelUrl);
 
-        // piccola verifica: prova a fetchare il file per vedere se esiste davvero
+        // Verifica rapida che il file esista davvero
         const resp = await fetch(modelUrl, { cache: "no-store" });
         if (!resp.ok) {
-          throw new Error("Modello non trovato: " + modelUrl + " (HTTP " + resp.status + "). " +
-            "Carica yolov8n.onnx nella repo, stessa cartella di index.html.");
+          throw new Error(
+            "Modello non trovato: " + modelUrl +
+            " (HTTP " + resp.status + "). " +
+            "Carica yolov8n.onnx nella repo, stessa cartella di index.html."
+          );
         }
         log("Modello trovato ✅ (fetch OK)");
 
-        // crea sessione
-        const session = await ort.InferenceSession.create(modelUrl, { executionProviders: ["wasm"] });
+        // ✅ FIX FINALE: lascia scegliere a ORT il provider migliore su Android
+        // (niente executionProviders esplicito)
+        log("Creo sessione ORT…");
+        const session = await ort.InferenceSession.create(modelUrl);
 
         log("✅ Sessione creata!");
         log("Inputs:", session.inputNames);
         log("Outputs:", session.outputNames);
 
         stateEl.className = "ok";
-        stateEl.textContent = "OK ✅ Modello caricato (WASM Android-safe)";
+        stateEl.textContent = "OK ✅ Modello caricato (Android-safe)";
         alert("OK ✅ Modello caricato!");
       } catch (e) {
         stateEl.className = "bad";
@@ -123,11 +129,10 @@
   <hr />
 
   <div class="box">
-    <div class="bad">Note importanti:</div>
+    <div class="bad"><strong>Note importanti:</strong></div>
     <ul>
-      <li><b>Devi caricare</b> <code>yolov8n.onnx</code> nella tua repo, <b>stessa cartella</b> di <code>index.html</code>.</li>
-      <li>Se vedi KO, guarda il <b>log</b>: ti dirà se è 404 (file mancante) o altro.</li>
-      <li>Su Android teniamo <code>simd=false</code> e <code>threads=1</code> per massima compatibilità.</li>
+      <li>Devi avere <code>index.html</code> e <code>yolov8n.onnx</code> nella <strong>stessa cartella</strong> della repo.</li>
+      <li>Se vedi KO, guarda il log: ti dirà se è 404 (file mancante) o altro.</li>
     </ul>
   </div>
 </body>
