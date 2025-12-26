@@ -1,83 +1,25 @@
-<!doctype html>
-<html lang="it">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Num-Aut-Imag - ONNX Runtime Web (fix wasm)</title>
-  <!-- If this is a project pages site (https://sercuctech-sc.github.io/Num-Aut-Imag/) keep the base: -->
-  <base href="/Num-Aut-Imag/">
-  <style>
-    body { font-family: Roboto, Arial, sans-serif; padding: 1rem; }
-    pre { background:#f5f5f5; padding:1rem; border-radius:6px; }
-    .error { color: #8b0000; }
-  </style>
-</head>
-<body>
-  <h1>Num-Aut-Imag — Test ONNX Runtime Web (fix wasm)</h1>
-  <p>Questa pagina carica <code>onnxruntime-web</code> dal CDN e forza il caricamento del file .wasm corrispondente dal CDN (risolve problemi di Content-Type / headers quando i file venivano serviti da raw.githubusercontent o percorsi errati).</p>
+<script>
+const logEl = document.getElementById('log');
+function log(...a){
+  console.log(...a);
+  logEl.textContent += a.join(' ') + '\n';
+}
 
-  <p>Modifica <code>modelUrl</code> sotto con il percorso al tuo modello .onnx (relativo alla repo o assoluto).</p>
-  <pre id="log"></pre>
+(async()=>{
+  const modelUrl = 'https://cdn.jsdelivr.net/gh/ultralytics/assets@v0.0.0/yolov8n.onnx';
 
-  <!-- ONNX Runtime Web (minified) from jsDelivr -->
-  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
-  <script>
-    const logEl = document.getElementById('log');
-    function log(...args){
-      console.log(...args);
-      logEl.textContent += args.map(a=> (typeof a === 'object' ? JSON.stringify(a,null,2) : String(a))).join(' ') + '\n';
-    }
+  ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
+  ort.env.wasm.simd = false;      // <<< BLOCCO SIMD
+  ort.env.wasm.numThreads = 1;    // <<< BLOCCO MULTI THREAD
 
-    (async function main(){
-      try{
-        // Indirizzo del modello: impostato su Ultralytics release per YOLOv8n
-        const modelUrl = 'https://cdn.jsdelivr.net/gh/ultralytics/assets@v0.0.0/yolov8n.onnx';
-
-        // Forziamo il caricamento del runtime wasm dal CDN jsDelivr per evitare problemi di headers/Content-Type
-        if (typeof ort !== 'undefined' && ort.env && ort.env.wasm) {
-          // path al file ort-wasm.wasm sul CDN jsDelivr
-          ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/wasm/ort-wasm.wasm';
-          log('Impostato ort.env.wasm.wasmPaths su:', ort.env.wasm.wasmPaths);
-        } else {
-          log('onnxruntime-web non è stato caricato correttamente.');
-        }
-
-        // Proviamo prima il backend WASM; se fallisce useremo WebGL come fallback
-        try{
-          log('Tentativo di creare sessione con backend WASM...');
-          const session = await ort.InferenceSession.create(modelUrl, {executionProviders: ['wasm']});
-          log('Sessione creata (wasm):', session);
-          alert('Model caricato con successo usando backend WASM.');
-        } catch (wasmErr) {
-          log('Errore backend WASM:', wasmErr);
-          // fallback a WebGL
-          try{
-            log('Tentativo fallback a WebGL...');
-            const session2 = await ort.InferenceSession.create(modelUrl, {executionProviders: ['webgl']});
-            log('Sessione creata (webgl):', session2);
-            alert('Model caricato con successo usando backend WebGL (fallback).');
-          } catch (webglErr) {
-            log('Errore fallback WebGL:', webglErr);
-            // Mostriamo un messaggio amichevole in italiano
-            const userMessage = 'Errore caricamento modello: Nessun backend disponibile. Dettagli console.';
-            log(userMessage);
-            alert(userMessage + '\nControlla la Console (DevTools) e la tab Network per richieste .wasm/.onnx fallite (404/403/CORS).');
-          }
-        }
-      } catch (e) {
-        log('Errore inaspettato durante l\'avvio:', e);
-        alert('Errore inaspettato (vedi console).');
-      }
-    })();
-  </script>
-
-  <hr />
-  <p class="error">Note:
-    <ul>
-      <li>Se pubblichi su GitHub Pages come progetto (username.github.io/Num-Aut-Imag) assicurati che i file .wasm/.onnx siano committati nella repo e referenziati usando percorsi relativi o usa il <code>&lt;base href="/Num-Aut-Imag/"&gt;</code> come sopra.</li>
-      <li>Se servi file .wasm da un altro dominio, assicurati che il server imposti <code>Content-Type: application/wasm</code> e <code>Access-Control-Allow-Origin</code> corretti.</li>
-      <li>In alternativa, usa jsDelivr per servire staticamente i file dal repo: <code>https://cdn.jsdelivr.net/gh/sercuctech-sc/Num-Aut-Imag/path/to/file.wasm</code></li>
-    </ul>
-  </p>
-</body>
-</html>
+  try{
+    log("Avvio backend WASM compatibile Android...");
+    const session = await ort.InferenceSession.create(modelUrl,{executionProviders:['wasm']});
+    log("SESSIONE OK");
+    alert("MODELLO YOLOv8 CARICATO SU ANDROID ✔");
+  }catch(e){
+    log("ERRORE:",e);
+    alert("ERRORE ANDROID: " + e);
+  }
+})();
+</script>
