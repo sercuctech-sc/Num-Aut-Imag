@@ -3,104 +3,77 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Num-Aut-Imag — ORT test</title>
-
-  <!-- ✅ CONSIGLIO: per evitare “pagina bianca”, NON usare <base>.
-       Su GitHub Pages funziona lo stesso se usi URL assoluti per CDN e modello. -->
-
+  <title>Num-Aut-Imag - ONNX Runtime Web (fix wasm)</title>
+  <base href="/Num-Aut-Imag/">
   <style>
-    body { font-family: Roboto, Arial, sans-serif; padding: 16px; }
-    .box { padding:12px; border:1px solid #ddd; border-radius:10px; margin:12px 0; }
-    pre { background:#f5f5f5; padding:12px; border-radius:10px; white-space:pre-wrap; overflow:auto; }
-    .ok { color: #0a7a1f; font-weight:700; }
-    .bad { color: #8b0000; font-weight:700; }
-    button { padding:10px 12px; border-radius:10px; border:1px solid #ccc; background:#fff; }
+    body { font-family: Roboto, Arial, sans-serif; padding: 1rem; }
+    pre { background:#f5f5f5; padding:1rem; border-radius:6px; }
+    .error { color: #8b0000; }
   </style>
 </head>
-
 <body>
-  <h1>Num-Aut-Imag — Test ONNX Runtime Web</h1>
+  <h1>Num-Aut-Imag — Test ONNX Runtime Web (fix wasm)</h1>
+  <p>Questa pagina carica <code>onnxruntime-web</code> dal CDN e forza il caricamento del file .wasm corrispondente dal CDN.</p>
 
-  <div class="box" id="status">
-    Stato: <span id="state">Pagina caricata ✅</span>
-  </div>
+  <p><b>Modifica <code>modelUrl</code> sotto</b> con il percorso appropriato al tuo modello .onnx (relativo alla repo o assoluto).</p>
+  <pre id="log"></pre>
 
-  <button id="btn">▶ Avvia test (carica modello)</button>
-
-  <pre id="log">Log pronto…\n</pre>
-
-  <!-- ORT -->
+  <!-- ONNX Runtime Web (minified) from jsDelivr -->
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
-
   <script>
     const logEl = document.getElementById('log');
-    const stateEl = document.getElementById('state');
-    const statusBox = document.getElementById('status');
-
     function log(...args){
       console.log(...args);
-      logEl.textContent += args.map(x => {
-        if (x instanceof Error) return (x.stack || x.message || String(x));
-        if (typeof x === 'object') return JSON.stringify(x, null, 2);
-        return String(x);
-      }).join(' ') + '\n';
+      logEl.textContent += args.map(a=> (typeof a === 'object' ? JSON.stringify(a,null,2) : String(a))).join(' ') + '\n';
     }
 
-    // ✅ cattura errori che altrimenti causano “pagina bianca”
-    window.addEventListener('error', (e) => {
-      statusBox.className = "box";
-      stateEl.className = "bad";
-      stateEl.textContent = "ERRORE JS (vedi log sotto)";
-      log("window.error:", e.message, e.filename + ":" + e.lineno + ":" + e.colno);
-      if (e.error) log(e.error);
-    });
-
-    window.addEventListener('unhandledrejection', (e) => {
-      statusBox.className = "box";
-      stateEl.className = "bad";
-      stateEl.textContent = "PROMISE REJECT (vedi log sotto)";
-      log("unhandledrejection:", e.reason);
-    });
-
-    async function runTest(){
+    (async function main(){
       try{
-        stateEl.className = "";
-        stateEl.textContent = "Avvio test…";
+        // Indirizzo del modello .onnx
+        const modelUrl = 'https://raw.githubusercontent.com/ultralytics/assets/main/yolov8n.onnx';
 
-        if (!window.ort) {
-          throw new Error("ort non caricato. CDN bloccato o offline.");
+        // Forziamo il caricamento del runtime wasm dal CDN jsDelivr
+        if (typeof ort !== 'undefined' && ort.env && ort.env.wasm) {
+          ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/wasm/ort-wasm.wasm';
+          log('Impostato ort.env.wasm.wasmPaths su:', ort.env.wasm.wasmPaths);
+        } else {
+          log('onnxruntime-web non è stato caricato correttamente.');
         }
 
-        // ✅ FIX ANDROID: niente SIMD, niente multi-thread
-        ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
-        ort.env.wasm.simd = false;
-        ort.env.wasm.numThreads = 1;
-
-        log("ORT ok. wasmPaths:", ort.env.wasm.wasmPaths);
-        log("Android-safe: simd=false, threads=1");
-
-        // modello test
-        const modelUrl = "https://cdn.jsdelivr.net/gh/ultralytics/assets@v0.0.0/yolov8n.onnx";
-        log("Carico modello:", modelUrl);
-
-        const session = await ort.InferenceSession.create(modelUrl, { executionProviders: ["wasm"] });
-
-        log("✅ Sessione creata!");
-        log("Inputs:", session.inputNames);
-        log("Outputs:", session.outputNames);
-
-        stateEl.className = "ok";
-        stateEl.textContent = "OK ✅ Modello caricato (WASM Android-safe)";
-        alert("OK ✅ Modello caricato!");
+        // Proviamo prima backend WASM; fallback a WebGL
+        try{
+          log('Tentativo di creare sessione con backend WASM...');
+          const session = await ort.InferenceSession.create(modelUrl, {executionProviders: ['wasm']});
+          log('Sessione creata (wasm):', session);
+          alert('Model caricato con successo usando backend WASM.');
+        } catch (wasmErr) {
+          log('Errore backend WASM:', wasmErr);
+          try{
+            log('Tentativo fallback a WebGL...');
+            const session2 = await ort.InferenceSession.create(modelUrl, {executionProviders: ['webgl']});
+            log('Sessione creata (webgl):', session2);
+            alert('Model caricato con successo usando backend WebGL (fallback).');
+          } catch (webglErr) {
+            log('Errore fallback WebGL:', webglErr);
+            const userMessage = 'Errore caricamento modello: Nessun backend disponibile.';
+            log(userMessage);
+            alert(userMessage + '\nControlla Console e Network.');
+          }
+        }
       } catch (e) {
-        stateEl.className = "bad";
-        stateEl.textContent = "KO ❌ (vedi log)";
-        log("❌ ERRORE:", e);
-        alert("Errore: " + (e?.message || e));
+        log('Errore inaspettato durante l\'avvio:', e);
+        alert('Errore inaspettato (vedi console).');
       }
-    }
-
-    document.getElementById('btn').addEventListener('click', runTest);
+    })();
   </script>
+
+  <hr />
+  <p class="error">Note:
+    <ul>
+      <li>Assicurati che il file .onnx sia accessibile sulla rete.</li>
+      <li>Se usi un link raw di GitHub, assicurati che i permessi CORS siano corretti.</li>
+      <li>Altrimenti carica il file nella tua repo e usa un percorso relativo.</li>
+    </ul>
+  </p>
 </body>
 </html>
