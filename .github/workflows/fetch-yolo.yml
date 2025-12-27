@@ -9,42 +9,45 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Ultralytics + ONNX
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Ultralytics + ONNX (stable)
         run: |
           python -m pip install --upgrade pip
-          pip install ultralytics onnx
+          pip install --no-input --progress-bar off ultralytics onnx
 
-      - name: Export YOLOv8n to ONNX
+      - name: Export YOLOv8n to ONNX (no hang)
         run: |
-          yolo export model=yolov8n.pt format=onnx imgsz=640
-          echo "=== LIST FILES ==="
-          ls -lah
+          python - <<'PY'
+          from ultralytics import YOLO
+          m = YOLO("yolov8n.pt")
+          m.export(format="onnx", imgsz=640)
+          print("Export done.")
+          PY
+
           echo "=== FIND ONNX ==="
-          find . -maxdepth 6 -type f -name "*.onnx" -print -exec ls -lh {} \;
+          find . -maxdepth 8 -type f -name "*.onnx" -print -exec ls -lh {} \;
 
       - name: Place model in repo root as yolov8n.onnx
         shell: bash
         run: |
           set -euo pipefail
-          # trova il .onnx più grande (quello vero)
           MODEL_PATH="$(find . -maxdepth 8 -type f -name "*.onnx" -printf "%s %p\n" | sort -nr | head -n1 | awk '{print $2}')"
           echo "MODEL_PATH=$MODEL_PATH"
-          if [ -z "${MODEL_PATH:-}" ]; then
-            echo "No ONNX found!"
-            exit 1
-          fi
+          [ -n "$MODEL_PATH" ]
 
-          # copia in root con nome fisso
-          rm -f ./yolov8n.onnx
           cp "$MODEL_PATH" ./yolov8n.onnx
-
-          echo "Root model:"
           ls -lh ./yolov8n.onnx
 
-          # controllo dimensione: deve essere > 1MB
           SIZE=$(stat -c%s ./yolov8n.onnx)
           if [ "$SIZE" -lt 1000000 ]; then
             echo "Model too small in root!"
@@ -56,6 +59,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add yolov8n.onnx
-          git status
           git commit -m "Add proper yolov8n.onnx (exported in Actions)" || echo "Nothing to commit"
           git push
