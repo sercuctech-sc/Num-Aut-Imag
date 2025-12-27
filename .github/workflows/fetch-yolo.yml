@@ -1,4 +1,4 @@
-name: Build YOLOv8n ONNX and commit
+name: Build YOLOv8n ONNX and commit (best)
 
 on:
   workflow_dispatch:
@@ -25,46 +25,53 @@ jobs:
           python -m pip install --upgrade pip
           pip install ultralytics onnx
 
-      - name: Remove old root model (avoid re-picking it)
+      - name: Export YOLOv8n to ONNX (fresh)
         run: |
-          rm -f yolov8n.onnx
-          echo "Old root yolov8n.onnx removed (if existed)."
-
-      - name: Export YOLOv8n to ONNX
-        run: |
+          set -euo pipefail
           python - <<'PY'
           from ultralytics import YOLO
           m = YOLO("yolov8n.pt")
-          m.export(format="onnx", imgsz=640)
-          print("Export done.")
+          # Esporta e semplifica (più compatibile)
+          m.export(format="onnx", imgsz=640, simplify=True)
           PY
 
-      - name: Find exported ONNX and place in repo root
+      - name: Locate exported ONNX and place to repo root
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Searching exported .onnx (excluding ./yolov8n.onnx)..."
-          FILE=$(find . -type f -name "*.onnx" ! -path "./yolov8n.onnx" | head -n 1 || true)
+          echo "Searching exported .onnx..."
+          # Trova l'onnx esportato (di solito sta in ./yolov8n.onnx oppure in una subcartella)
+          FILE="$(find . -type f -name '*.onnx' ! -path './yolov8n.onnx' | head -n 1 || true)"
 
-          echo "FOUND: ${FILE:-NONE}"
-
-          if [ -z "${FILE:-}" ]; then
-            echo "ERROR: No exported .onnx found."
-            echo "All .onnx files found:"
-            find . -type f -name "*.onnx" -print || true
+          # Se Ultralytics ha esportato direttamente in root come yolov8n.onnx, lo rileviamo qui:
+          if [ -z "$FILE" ] && [ -f "./yolov8n.onnx" ]; then
+            echo "Export already in root: ./yolov8n.onnx"
+          elif [ -n "$FILE" ]; then
+            echo "FOUND exported: $FILE"
+            rm -f ./yolov8n.onnx
+            cp "$FILE" ./yolov8n.onnx
+          else
+            echo "ERROR: No ONNX produced."
+            find . -maxdepth 6 -type f -name '*.onnx' -print || true
             exit 1
           fi
 
-          cp -f "$FILE" ./yolov8n.onnx
-
-          echo "Root model ready:"
+          echo "Final model in repo root:"
           ls -lh ./yolov8n.onnx
 
-      - name: Commit model
+      - name: Commit model only if changed
         run: |
+          set -euo pipefail
           git config user.name "github-actions"
           git config user.email "actions@github.com"
+
           git add yolov8n.onnx
-          git commit -m "Add/update yolov8n.onnx" || echo "No changes to commit"
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Update yolov8n.onnx"
           git push
