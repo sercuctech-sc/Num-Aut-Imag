@@ -12,9 +12,11 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -23,25 +25,46 @@ jobs:
           python -m pip install --upgrade pip
           pip install ultralytics onnx
 
+      - name: Remove old root model (avoid re-picking it)
+        run: |
+          rm -f yolov8n.onnx
+          echo "Old root yolov8n.onnx removed (if existed)."
+
       - name: Export YOLOv8n to ONNX
         run: |
           python - <<'PY'
           from ultralytics import YOLO
           m = YOLO("yolov8n.pt")
           m.export(format="onnx", imgsz=640)
+          print("Export done.")
           PY
 
-      - name: Find & place model
+      - name: Find exported ONNX and place in repo root
+        shell: bash
         run: |
-          FILE=$(find . -name "*.onnx" | head -n 1)
-          echo "FOUND: $FILE"
-          cp "$FILE" ./yolov8n.onnx
-          ls -lh yolov8n.onnx
+          set -euo pipefail
+
+          echo "Searching exported .onnx (excluding ./yolov8n.onnx)..."
+          FILE=$(find . -type f -name "*.onnx" ! -path "./yolov8n.onnx" | head -n 1 || true)
+
+          echo "FOUND: ${FILE:-NONE}"
+
+          if [ -z "${FILE:-}" ]; then
+            echo "ERROR: No exported .onnx found."
+            echo "All .onnx files found:"
+            find . -type f -name "*.onnx" -print || true
+            exit 1
+          fi
+
+          cp -f "$FILE" ./yolov8n.onnx
+
+          echo "Root model ready:"
+          ls -lh ./yolov8n.onnx
 
       - name: Commit model
         run: |
-          git config user.name github-actions
-          git config user.email actions@github.com
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
           git add yolov8n.onnx
-          git commit -m "Add proper yolov8n.onnx" || echo "No changes"
+          git commit -m "Add/update yolov8n.onnx" || echo "No changes to commit"
           git push
