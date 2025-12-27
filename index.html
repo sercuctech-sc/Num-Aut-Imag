@@ -40,13 +40,22 @@
     </div>
 
     <div class="row" style="margin-top:10px">
-      <label>Confidenza: <input id="conf" type="range" min="0" max="1" step="0.01" value="0.35"/><span id="confV">0.35</span></label>
-      <label>NMS IoU: <input id="iou" type="range" min="0" max="1" step="0.01" value="0.45"/><span id="iouV">0.45</span></label>
+      <label>Confidenza:
+        <input id="conf" type="range" min="0" max="1" step="0.01" value="0.35"/>
+        <span id="confV">0.35</span>
+      </label>
+      <label>NMS IoU:
+        <input id="iou" type="range" min="0" max="1" step="0.01" value="0.45"/>
+        <span id="iouV">0.45</span>
+      </label>
+      <label style="margin-left:auto">Mostra %:
+        <input id="showPct" type="checkbox" checked />
+      </label>
     </div>
 
     <p class="small">
-      Suggerimento: premi “Carica modello”, scegli una foto, poi “Analizza immagine”.
-      Se qualcosa va storto, guarda il log sotto.
+      Premi “Carica modello”, scegli una foto, poi “Analizza immagine”.
+      Risultato: box + numeri progressivi 1..N sugli oggetti.
     </p>
 
     <canvas id="cv"></canvas>
@@ -105,19 +114,12 @@
         setStatus("Carico modello...", null);
         log("ORT version:", (window.ort && ort.version) ? ort.version : "unknown");
 
-        // Android-safe: niente thread, niente SIMD forzato
+        // Android-safe
         ort.env.wasm.numThreads = 1;
         ort.env.wasm.simd = false;
-
-        log("wasmPaths:", "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/");
         ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
 
         log("Android-safe:", "simd=false,", "threads=1");
-
-        // verifica wasm
-        log("✅ WASM base (ort-wasm.wasm) OK");
-        log("✅ WASM simd (ort-wasm-simd.wasm) OK");
-
         log("Carico modello:", MODEL_URL);
 
         session = await ort.InferenceSession.create(MODEL_URL, {
@@ -125,7 +127,6 @@
         });
 
         log("✅ Modello locale (yolov8n.onnx) OK");
-        log("Creo sessione ORT (WASM)...");
         log("✅ Sessione creata!");
         log("Inputs:", JSON.stringify(session.inputNames));
         log("Outputs:", JSON.stringify(session.outputNames));
@@ -170,19 +171,18 @@
       off.width = size; off.height = size;
       const octx = off.getContext("2d");
 
-      // letterbox semplice: qui facciamo stretch (più semplice/robusto)
+      // stretch 640x640 (robusto e semplice)
       octx.drawImage(bitmap, 0, 0, size, size);
 
       const imgData = octx.getImageData(0,0,size,size).data;
       const chw = new Float32Array(1 * 3 * size * size);
 
-      // RGBA -> CHW, normalize 0..1
       let p = 0;
       const area = size * size;
       for(let i=0;i<area;i++){
-        const r = imgData[p] / 255;     // R
-        const g = imgData[p+1] / 255;   // G
-        const b = imgData[p+2] / 255;   // B
+        const r = imgData[p] / 255;
+        const g = imgData[p+1] / 255;
+        const b = imgData[p+2] / 255;
         chw[i] = r;
         chw[i + area] = g;
         chw[i + area*2] = b;
@@ -191,7 +191,7 @@
       return {tensor: new ort.Tensor("float32", chw, [1,3,size,size]), size};
     }
 
-    // ===== Postprocess (robust) =====
+    // ===== Postprocess =====
     function iou(a,b){
       const x1 = Math.max(a.x1,b.x1), y1=Math.max(a.y1,b.y1);
       const x2 = Math.min(a.x2,b.x2), y2=Math.min(a.y2,b.y2);
@@ -215,24 +215,20 @@
       return out;
     }
 
-    // Supporta due formati frequenti:
-    // A) [1,84,8400] (Ultralytics export classico): (x,y,w,h, cls...)
-    // B) [1,8400,84]
+    // Output tipico Ultralytics: [1,84,8400] oppure [1,8400,84]
     function decodeYOLO(outputTensor, confThr){
       const data = outputTensor.data;
-      const dims = outputTensor.dims; // es. [1,84,8400]
+      const dims = outputTensor.dims;
       log("Output dims:", JSON.stringify(dims), "len:", data.length);
 
-      let C, N, layout; // C=channels(84), N=boxes(8400)
+      let C, N, layout;
       if(dims.length === 3){
-        // [1,C,N] oppure [1,N,C]
-        if(dims[1] < dims[2]){ // tipico [1,84,8400]
+        if(dims[1] < dims[2]){
           C = dims[1]; N = dims[2]; layout = "1CN";
         }else{
           N = dims[1]; C = dims[2]; layout = "1NC";
         }
       } else {
-        // fallback: impossibile sapere -> ritorna vuoto
         return [];
       }
 
@@ -242,13 +238,11 @@
       for(let i=0;i<N;i++){
         let x,y,w,h;
         if(layout==="1CN"){
-          // index = c*N + i
           x = data[0*N + i];
           y = data[1*N + i];
           w = data[2*N + i];
           h = data[3*N + i];
 
-          // class scores
           let best=-1, bestScore=0;
           for(let c=0;c<numClasses;c++){
             const s = data[(4+c)*N + i];
@@ -259,7 +253,6 @@
             boxes.push({cx:x, cy:y, w:w, h:h, cls:best, score});
           }
         } else {
-          // 1NC: index = i*C + c
           const base = i*C;
           x = data[base+0]; y=data[base+1]; w=data[base+2]; h=data[base+3];
 
@@ -277,24 +270,61 @@
       return boxes;
     }
 
-    function drawBoxesOnCanvas(bitmap, boxes, inputSize=640){
-      // ridisegna immagine
+    // ===== NUMERAZIONE: ordine umano =====
+    function sortForNumbering(boxesInCanvas){
+      // Ordina: prima per riga (y), poi per x
+      // Soglia riga dinamica (in base al canvas) -> più robusto su foto diverse
+      const rowTol = Math.max(18, Math.round(cv.height * 0.03)); // ~3% altezza o min 18px
+
+      return boxesInCanvas.slice().sort((a,b)=>{
+        const dy = a.ry - b.ry;
+        if(Math.abs(dy) > rowTol) return dy;
+        return a.rx - b.rx;
+      });
+    }
+
+    function drawNumberBadge(x, y, n, showPct=false, pctText=""){
+      // cerchio rosso + numero bianco
+      const r = 12;
+      ctx.fillStyle = "red";
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI*2);
+      ctx.fill();
+
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 14px system-ui";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(String(n), x, y);
+
+      if(showPct && pctText){
+        // piccola etichetta sotto
+        ctx.font = "12px system-ui";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = "rgba(0,0,0,0.75)";
+        const pad = 4;
+        const tw = ctx.measureText(pctText).width + pad*2;
+        const th = 16;
+        ctx.fillRect(x - r, y + r + 4, tw, th);
+        ctx.fillStyle = "#fff";
+        ctx.fillText(pctText, x - r + pad, y + r + 6);
+      }
+    }
+
+    function drawBoxesAndNumbers(bitmap, boxes, inputSize=640){
       drawImageToCanvas(bitmap);
 
-      // converti coordinate dal 640x640 alla canvas attuale
+      // conversioni coordinate
       const scaleX = cv.width / bitmap.width;
       const scaleY = cv.height / bitmap.height;
 
-      // ma le box sono nel sistema 640 (perché abbiamo fatto stretch 640x640),
-      // quindi prima le portiamo nel sistema bitmap (stretch -> bitmap piena)
+      // box nel sistema 640x640 -> riportiamo a bitmap
       const sx = bitmap.width / inputSize;
       const sy = bitmap.height / inputSize;
 
-      ctx.lineWidth = 2;
-      ctx.font = "14px system-ui";
-      ctx.textBaseline = "top";
-
-      for(const b of boxes){
+      // Prima creiamo una lista di box in coordinate canvas
+      const canvasBoxes = boxes.map(b=>{
         const x1 = (b.cx - b.w/2) * sx;
         const y1 = (b.cy - b.h/2) * sy;
         const x2 = (b.cx + b.w/2) * sx;
@@ -305,17 +335,29 @@
         const rw = (x2-x1) * scaleX;
         const rh = (y2-y1) * scaleY;
 
+        return { ...b, rx, ry, rw, rh };
+      });
+
+      // Disegno box
+      ctx.lineWidth = 2;
+      for(const b of canvasBoxes){
         ctx.strokeStyle = "#00a000";
         ctx.fillStyle = "rgba(0,160,0,0.15)";
-        ctx.fillRect(rx,ry,rw,rh);
-        ctx.strokeRect(rx,ry,rw,rh);
+        ctx.fillRect(b.rx,b.ry,b.rw,b.rh);
+        ctx.strokeRect(b.rx,b.ry,b.rw,b.rh);
+      }
 
-        const label = `#${b.cls} ${(b.score*100).toFixed(1)}%`;
-        ctx.fillStyle = "rgba(0,0,0,0.7)";
-        const tw = ctx.measureText(label).width + 8;
-        ctx.fillRect(rx, ry, tw, 18);
-        ctx.fillStyle = "#fff";
-        ctx.fillText(label, rx+4, ry+2);
+      // Ordina e NUMERA
+      const ordered = sortForNumbering(canvasBoxes);
+      const showPct = $("showPct").checked;
+
+      let n = 1;
+      for(const b of ordered){
+        const pct = `${(b.score*100).toFixed(0)}%`;
+        // badge in alto a sinistra della box
+        const bx = b.rx + 14;
+        const by = b.ry + 14;
+        drawNumberBadge(bx, by, n++, showPct, showPct ? pct : "");
       }
     }
 
@@ -323,7 +365,7 @@
     async function run(){
       try{
         if(!modelReady || !imageReady || !session){
-          alert("Prima sistemiamo il caricamento del modello. Se vedi 'Modello OK ✅', poi procediamo con l'analisi.");
+          alert("Prima carica il modello e scegli una foto.");
           return;
         }
 
@@ -333,30 +375,23 @@
         const confThr = +$("conf").value;
         const iouThr = +$("iou").value;
 
-        // preprocess
-        const {tensor, size} = preprocess(imgBitmap, 640);
+        const {tensor} = preprocess(imgBitmap, 640);
         log("Preprocess OK, tensor dims:", JSON.stringify(tensor.dims));
 
         const feeds = {};
         feeds[session.inputNames[0]] = tensor;
 
-        // inferenza
         const t0 = performance.now();
         const results = await session.run(feeds);
         const t1 = performance.now();
         log(`Inference OK in ${(t1-t0).toFixed(0)} ms`);
 
-        // prendi output principale
         const outName = session.outputNames[0];
         const out = results[outName];
-        if(!out){
-          throw new Error("Output mancante: " + outName);
-        }
+        if(!out) throw new Error("Output mancante: " + outName);
 
-        // decode + NMS
         const raw = decodeYOLO(out, confThr);
 
-        // converti in x1y1x2y2 per NMS
         const boxes = raw.map(b => ({
           ...b,
           x1: b.cx - b.w/2,
@@ -366,12 +401,12 @@
         }));
 
         const finalBoxes = nms(boxes, iouThr);
-
         log("Detections raw:", raw.length, "after NMS:", finalBoxes.length);
 
-        drawBoxesOnCanvas(imgBitmap, finalBoxes, 640);
+        // === QUI: box + numerazione 1..N ===
+        drawBoxesAndNumbers(imgBitmap, finalBoxes, 640);
 
-        setStatus(`Analisi completata ✅ Trovati: ${finalBoxes.length}`, true);
+        setStatus(`Analisi completata ✅ Numerati: ${finalBoxes.length}`, true);
       }catch(e){
         console.error(e);
         setStatus("Errore analisi ❌", false);
@@ -390,9 +425,6 @@
       updateRunEnabled();
       setStatus(modelReady ? "Modello OK ✅ Ora scegli una foto" : "Pronto", modelReady);
     });
-
-    // Auto-load model on open (opzionale ma comodo)
-    // loadModel();
   </script>
 </body>
 </html>
