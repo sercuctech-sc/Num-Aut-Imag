@@ -12,23 +12,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download model
+      - name: Download model (robust, multi-source)
+        shell: bash
         run: |
+          set -euo pipefail
           rm -f yolov8n.onnx
-          curl -L --retry 5 --retry-delay 2 -o yolov8n.onnx \
-          https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.onnx
 
-          ls -lh yolov8n.onnx
-          SIZE=$(stat -c%s yolov8n.onnx)
-          if [ "$SIZE" -lt 1000000 ]; then
-            echo "Model too small!"
+          URLS=(
+            "https://raw.githubusercontent.com/ultralytics/assets/v0.0.0/yolov8n.onnx"
+            "https://raw.fastgit.org/ultralytics/assets/v0.0.0/yolov8n.onnx"
+            "https://cdn.jsdelivr.net/gh/ultralytics/assets@v0.0.0/yolov8n.onnx"
+          )
+
+          ok=0
+          for u in "${URLS[@]}"; do
+            echo "Trying: $u"
+            if curl -L --fail --retry 5 --retry-delay 2 \
+              -H "Accept: application/octet-stream" \
+              -o yolov8n.onnx "$u"; then
+              SIZE=$(stat -c%s yolov8n.onnx || echo 0)
+              echo "Downloaded size: $SIZE bytes"
+              if [ "$SIZE" -gt 1000000 ]; then
+                ok=1
+                break
+              fi
+            fi
+            rm -f yolov8n.onnx
+          done
+
+          if [ "$ok" -ne 1 ]; then
+            echo "FAILED: Could not download a valid model (file too small)."
             exit 1
           fi
 
-      - name: Commit model
+          ls -lh yolov8n.onnx
+
+      - name: Commit model to repo
         run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add yolov8n.onnx
-          git commit -m "Add YOLOv8n ONNX model"
+          git commit -m "Add proper yolov8n.onnx model (server-fetched)" || echo "Nothing to commit"
           git push
