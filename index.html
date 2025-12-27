@@ -6,7 +6,7 @@
   <title>Num-Aut-Imag — YOLOv8n ONNX</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px;background:#fafafa;color:#111}
-    .card{background:#fff;border:1px solid #ddd;border-radius:14px;padding:14px;max-width:980px;margin:0 auto}
+    .card{background:#fff;border:1px solid #ddd;border-radius:14px;padding:14px;max-width:1100px;margin:0 auto}
     h1{font-size:24px;margin:0 0 10px}
     button{padding:10px 12px;border-radius:12px;border:1px solid #bbb;background:#f4f4f4}
     button.primary{background:#111;color:#fff;border-color:#111}
@@ -15,13 +15,14 @@
     .small{font-size:13px;color:#444}
     .ok{color:#0a7a2f;font-weight:700}
     .bad{color:#b00020;font-weight:700}
-    canvas{max-width:100%;border:1px solid #ddd;border-radius:14px}
+    canvas{max-width:100%;border:1px solid #ddd;border-radius:14px;touch-action:manipulation}
     input[type="file"]{max-width:100%}
     input[type="number"]{width:90px;padding:8px;border-radius:10px;border:1px solid #bbb}
     pre{white-space:pre-wrap;background:#0b1020;color:#e9eefc;padding:10px;border-radius:12px;max-height:260px;overflow:auto}
     label{display:flex;gap:8px;align-items:center}
     .pill{display:inline-block;padding:6px 10px;border:1px solid #ddd;border-radius:999px;background:#f7f7f7}
     .pill b{font-size:14px}
+    .hint{opacity:.9}
   </style>
 </head>
 <body>
@@ -40,7 +41,10 @@
       <input id="imgInput" type="file" accept="image/*" />
       <button id="btnRun" class="primary" disabled>2) Analizza immagine</button>
       <button id="btnClear">Pulisci</button>
-      <span class="pill">Totale: <b id="totalCount">0</b></span>
+
+      <span class="pill">AI: <b id="totalAi">0</b></span>
+      <span class="pill">Manuali: <b id="totalManual">0</b></span>
+      <span class="pill">Totale: <b id="totalAll">0</b></span>
     </div>
 
     <div class="row" style="margin-top:10px">
@@ -65,13 +69,19 @@
     <div class="row" style="margin-top:10px">
       <button id="btnDlPng" disabled>⬇️ PNG</button>
       <button id="btnDlJpg" disabled>⬇️ JPG</button>
-      <button id="btnDlCsv" disabled>⬇️ CSV (lista)</button>
-      <span class="small" id="dlHint">(si attivano dopo l’analisi)</span>
+      <button id="btnDlCsv" disabled>⬇️ CSV (numero+classe)</button>
+
+      <span class="pill hint">Manuale:
+        <label style="margin-left:10px">ON <input id="manualMode" type="checkbox" disabled /></label>
+      </span>
+      <span class="pill hint">Prossimo # <b id="nextManual">-</b></span>
+
+      <button id="btnUndoManual" disabled>↩️ Annulla ultimo</button>
+      <button id="btnClearManual" disabled>🧹 Pulisci manuali</button>
     </div>
 
-    <p class="small">
-      Premi “Carica modello”, scegli una foto, poi “Analizza immagine”.
-      Risultato: box + numeri progressivi + totale + export PNG/JPG/CSV.
+    <p class="small hint">
+      Dopo l’analisi puoi attivare <b>Manuale ON</b> e poi <b>toccare sull’immagine</b> per aggiungere numeri dove l’AI non ha trovato oggetti.
     </p>
 
     <canvas id="cv"></canvas>
@@ -83,6 +93,18 @@
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
 
   <script>
+    // ===== COCO 80 class names (YOLOv8n default) =====
+    const COCO80 = [
+      "person","bicycle","car","motorcycle","airplane","bus","train","truck","boat","traffic light",
+      "fire hydrant","stop sign","parking meter","bench","bird","cat","dog","horse","sheep","cow",
+      "elephant","bear","zebra","giraffe","backpack","umbrella","handbag","tie","suitcase","frisbee",
+      "skis","snowboard","sports ball","kite","baseball bat","baseball glove","skateboard","surfboard","tennis racket","bottle",
+      "wine glass","cup","fork","knife","spoon","bowl","banana","apple","sandwich","orange",
+      "broccoli","carrot","hot dog","pizza","donut","cake","chair","couch","potted plant","bed",
+      "dining table","toilet","tv","laptop","mouse","remote","keyboard","cell phone","microwave","oven",
+      "toaster","sink","refrigerator","book","clock","vase","scissors","teddy bear","hair drier","toothbrush"
+    ];
+
     // ===== Utils =====
     const $ = (id) => document.getElementById(id);
     const logEl = $("log");
@@ -92,44 +114,11 @@
       s.textContent = txt;
       s.className = ok===true ? "ok" : ok===false ? "bad" : "";
     }
-
-    // ===== State =====
-    let session = null;
-    let modelReady = false;
-    let imageReady = false;
-    let imgBitmap = null;
-    let lastResultReady = false;
-    let lastNumbered = []; // CSV export: lista già ordinata e numerata
-
-    const MODEL_URL = "./yolov8n.onnx?v=" + Date.now(); // anti-cache
-
-    // ===== UI =====
-    $("conf").addEventListener("input", ()=> $("confV").textContent = (+$("conf").value).toFixed(2));
-    $("iou").addEventListener("input",  ()=> $("iouV").textContent  = (+$("iou").value).toFixed(2));
-
-    function updateTotal(n){ $("totalCount").textContent = String(n || 0); }
-
-    function updateButtons(){
-      $("btnRun").disabled = !(modelReady && imageReady);
-      $("btnDlPng").disabled = !lastResultReady;
-      $("btnDlJpg").disabled = !lastResultReady;
-      $("btnDlCsv").disabled = !lastResultReady;
+    function pad2(n){ return String(n).padStart(2,"0"); }
+    function ts(){
+      const d = new Date();
+      return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}_${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`;
     }
-
-    // ===== Canvas =====
-    const cv = $("cv");
-    const ctx = cv.getContext("2d");
-
-    function drawImageToCanvas(bitmap){
-      const maxW = 920;
-      const scale = Math.min(1, maxW / bitmap.width);
-      cv.width  = Math.round(bitmap.width * scale);
-      cv.height = Math.round(bitmap.height * scale);
-      ctx.clearRect(0,0,cv.width,cv.height);
-      ctx.drawImage(bitmap, 0, 0, cv.width, cv.height);
-    }
-
-    // ===== Download helpers =====
     function downloadDataUrl(dataUrl, filename){
       const a = document.createElement("a");
       a.href = dataUrl;
@@ -138,7 +127,6 @@
       a.click();
       a.remove();
     }
-
     function downloadText(text, filename){
       const blob = new Blob([text], {type:"text/plain;charset=utf-8"});
       const url = URL.createObjectURL(blob);
@@ -151,31 +139,218 @@
       setTimeout(()=>URL.revokeObjectURL(url), 1000);
     }
 
-    function ts(){
-      const d = new Date();
-      const pad = n => String(n).padStart(2,"0");
-      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+    // ===== State =====
+    let session = null;
+    let modelReady = false;
+    let imageReady = false;
+    let imgBitmap = null;
+
+    let lastResultReady = false;
+
+    // Risultati AI già ordinati e numerati (per CSV)
+    let lastNumberedAi = [];   // {num, clsId, clsName, score, rx,ry,rw,rh}
+    // Numeri manuali aggiunti dall’utente
+    let manualMarkers = [];    // {num, x, y} in coordinate canvas
+
+    let nextManualNumber = 1;
+
+    const MODEL_URL = "./yolov8n.onnx?v=" + Date.now(); // anti-cache
+
+    // ===== UI =====
+    $("conf").addEventListener("input", ()=> $("confV").textContent = (+$("conf").value).toFixed(2));
+    $("iou").addEventListener("input",  ()=> $("iouV").textContent  = (+$("iou").value).toFixed(2));
+
+    function updateTotals(){
+      $("totalAi").textContent = String(lastNumberedAi.length);
+      $("totalManual").textContent = String(manualMarkers.length);
+      $("totalAll").textContent = String(lastNumberedAi.length + manualMarkers.length);
     }
 
+    function updateButtons(){
+      $("btnRun").disabled = !(modelReady && imageReady);
+
+      $("btnDlPng").disabled = !lastResultReady;
+      $("btnDlJpg").disabled = !lastResultReady;
+      $("btnDlCsv").disabled = !lastResultReady;
+
+      // manual controls active only after analysis
+      $("manualMode").disabled = !lastResultReady;
+      $("btnUndoManual").disabled = !lastResultReady || manualMarkers.length === 0;
+      $("btnClearManual").disabled = !lastResultReady || manualMarkers.length === 0;
+
+      $("nextManual").textContent = lastResultReady ? String(nextManualNumber) : "-";
+      updateTotals();
+    }
+
+    // ===== Canvas =====
+    const cv = $("cv");
+    const ctx = cv.getContext("2d");
+
+    function drawImageToCanvas(bitmap){
+      const maxW = 980;
+      const scale = Math.min(1, maxW / bitmap.width);
+      cv.width  = Math.round(bitmap.width * scale);
+      cv.height = Math.round(bitmap.height * scale);
+      ctx.clearRect(0,0,cv.width,cv.height);
+      ctx.drawImage(bitmap, 0, 0, cv.width, cv.height);
+    }
+
+    function getCanvasPos(ev){
+      const rect = cv.getBoundingClientRect();
+      const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+      const clientY = ev.touches ? ev.touches[0].clientY : ev.clientY;
+      const x = (clientX - rect.left) * (cv.width / rect.width);
+      const y = (clientY - rect.top)  * (cv.height / rect.height);
+      return {x,y};
+    }
+
+    // ===== Drawing helpers =====
+    function drawNumberBadge(x, y, n, showPct=false, pctText=""){
+      const r = 12;
+      ctx.fillStyle = "red";
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI*2);
+      ctx.fill();
+
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 14px system-ui";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(String(n), x, y);
+
+      if(showPct && pctText){
+        ctx.font = "12px system-ui";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = "rgba(0,0,0,0.75)";
+        const pad = 4;
+        const tw = ctx.measureText(pctText).width + pad*2;
+        const th = 16;
+        ctx.fillRect(x - r, y + r + 4, tw, th);
+        ctx.fillStyle = "#fff";
+        ctx.fillText(pctText, x - r + pad, y + r + 6);
+      }
+    }
+
+    function redrawAll(){
+      if(!imgBitmap) return;
+      drawImageToCanvas(imgBitmap);
+
+      // 1) draw AI boxes
+      ctx.lineWidth = 2;
+      for(const b of lastNumberedAi){
+        ctx.strokeStyle = "#00a000";
+        ctx.fillStyle = "rgba(0,160,0,0.15)";
+        ctx.fillRect(b.rx,b.ry,b.rw,b.rh);
+        ctx.strokeRect(b.rx,b.ry,b.rw,b.rh);
+      }
+
+      // 2) draw AI numbers
+      const showPct = $("showPct").checked;
+      for(const b of lastNumberedAi){
+        const pct = `${(b.score*100).toFixed(0)}%`;
+        drawNumberBadge(b.rx + 14, b.ry + 14, b.num, showPct, showPct ? pct : "");
+      }
+
+      // 3) draw manual markers (blue)
+      for(const m of manualMarkers){
+        // blue badge
+        const r = 12;
+        ctx.fillStyle = "#0057ff";
+        ctx.beginPath();
+        ctx.arc(m.x, m.y, r, 0, Math.PI*2);
+        ctx.fill();
+
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 14px system-ui";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(m.num), m.x, m.y);
+      }
+    }
+
+    // ===== Manual mode clicks =====
+    function onCanvasTap(ev){
+      if(!$("manualMode").checked) return;
+      if(!lastResultReady) return;
+      ev.preventDefault();
+
+      const {x,y} = getCanvasPos(ev);
+      manualMarkers.push({ num: nextManualNumber, x, y });
+      nextManualNumber += 1;
+
+      redrawAll();
+      updateButtons();
+    }
+
+    cv.addEventListener("click", onCanvasTap);
+    cv.addEventListener("touchstart", onCanvasTap, {passive:false});
+
+    $("btnUndoManual").addEventListener("click", ()=>{
+      if(manualMarkers.length === 0) return;
+      const last = manualMarkers.pop();
+      // riportiamo indietro il contatore solo se era l’ultimo numero
+      if(last && last.num === nextManualNumber - 1){
+        nextManualNumber -= 1;
+      }
+      redrawAll();
+      updateButtons();
+    });
+
+    $("btnClearManual").addEventListener("click", ()=>{
+      manualMarkers = [];
+      // riparte dopo l’ultimo numero AI
+      nextManualNumber = (lastNumberedAi.length ? (lastNumberedAi[lastNumberedAi.length-1].num + 1) : parseInt($("startNum").value || "1",10));
+      redrawAll();
+      updateButtons();
+    });
+
+    // ===== Download =====
     $("btnDlPng").addEventListener("click", ()=>{
       downloadDataUrl(cv.toDataURL("image/png"), `Num-Aut-Imag_${ts()}.png`);
     });
-
     $("btnDlJpg").addEventListener("click", ()=>{
       downloadDataUrl(cv.toDataURL("image/jpeg", 0.92), `Num-Aut-Imag_${ts()}.jpg`);
     });
-
     $("btnDlCsv").addEventListener("click", ()=>{
-      if(!lastNumbered.length){
-        alert("Nessun dato da esportare. Fai prima Analizza.");
+      if(!lastResultReady){
+        alert("Prima fai Analizza.");
         return;
       }
-      // CSV: numero,classe,confidenza,x,y,w,h (coordinate CANVAS)
-      const header = "numero,classe,confidenza,x,y,w,h\n";
-      const rows = lastNumbered.map(r =>
-        `${r.num},${r.cls},${r.score.toFixed(4)},${r.rx.toFixed(1)},${r.ry.toFixed(1)},${r.rw.toFixed(1)},${r.rh.toFixed(1)}`
-      ).join("\n");
-      downloadText(header + rows + "\n", `Num-Aut-Imag_${ts()}.csv`);
+
+      // CSV: numero,classe,confidenza,tipo,x,y,w,h
+      // - AI: classe = nome, confidenza = score, tipo = ai, x/y/w/h = box canvas
+      // - Manuale: classe = manual, confidenza vuoto, tipo = manual, x/y = marker, w/h vuoti
+      const header = "numero,classe,confidenza,tipo,x,y,w,h\n";
+      const rows = [];
+
+      for(const b of lastNumberedAi){
+        rows.push([
+          b.num,
+          `"${(b.clsName || ("cls_"+b.clsId)).replace(/"/g,'""')}"`,
+          b.score.toFixed(4),
+          "ai",
+          b.rx.toFixed(1),
+          b.ry.toFixed(1),
+          b.rw.toFixed(1),
+          b.rh.toFixed(1)
+        ].join(","));
+      }
+
+      for(const m of manualMarkers){
+        rows.push([
+          m.num,
+          `"manual"`,
+          "",
+          "manual",
+          m.x.toFixed(1),
+          m.y.toFixed(1),
+          "",
+          ""
+        ].join(","));
+      }
+
+      downloadText(header + rows.join("\n") + "\n", `Num-Aut-Imag_${ts()}.csv`);
     });
 
     // ===== Model load =====
@@ -189,12 +364,13 @@
         ort.env.wasm.numThreads = 1;
         ort.env.wasm.simd = false;
         ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
+
         log("Android-safe:", "simd=false,", "threads=1");
         log("Carico modello:", MODEL_URL);
 
         session = await ort.InferenceSession.create(MODEL_URL, { executionProviders: ["wasm"] });
 
-        log("✅ Modello locale OK");
+        log("✅ Modello OK");
         log("✅ Sessione creata!");
         log("Inputs:", JSON.stringify(session.inputNames));
         log("Outputs:", JSON.stringify(session.outputNames));
@@ -224,19 +400,23 @@
 
         // reset risultati
         lastResultReady = false;
-        lastNumbered = [];
-        updateTotal(0);
+        lastNumberedAi = [];
+        manualMarkers = [];
+        nextManualNumber = parseInt($("startNum").value || "1", 10) || 1;
+        $("manualMode").checked = false;
 
         drawImageToCanvas(imgBitmap);
         log(`Immagine: ${f.name} ${imgBitmap.width}x${imgBitmap.height}`);
+        setStatus(modelReady ? "Modello OK ✅ Ora analizza" : "Carica modello", modelReady ? true : null);
         updateButtons();
       }catch(e){
         console.error(e);
         imageReady = false;
         imgBitmap = null;
         lastResultReady = false;
-        lastNumbered = [];
-        updateTotal(0);
+        lastNumberedAi = [];
+        manualMarkers = [];
+        $("manualMode").checked = false;
         log("❌ Errore immagine:", e?.message || e);
         updateButtons();
       }
@@ -255,12 +435,9 @@
       let p = 0;
       const area = size * size;
       for(let i=0;i<area;i++){
-        const r = imgData[p] / 255;
-        const g = imgData[p+1] / 255;
-        const b = imgData[p+2] / 255;
-        chw[i] = r;
-        chw[i + area] = g;
-        chw[i + area*2] = b;
+        chw[i] = imgData[p] / 255;
+        chw[i + area] = imgData[p+1] / 255;
+        chw[i + area*2] = imgData[p+2] / 255;
         p += 4;
       }
       return {tensor: new ort.Tensor("float32", chw, [1,3,size,size]), size};
@@ -307,7 +484,7 @@
       const boxes = [];
 
       for(let i=0;i<N;i++){
-        let x,y,w,h,score;
+        let x,y,w,h,score,clsId;
         if(layout==="1CN"){
           x = data[0*N + i];
           y = data[1*N + i];
@@ -319,8 +496,7 @@
             const s = data[(4+c)*N + i];
             if(s>bestScore){ bestScore=s; best=c; }
           }
-          score = bestScore;
-          if(score >= confThr) boxes.push({cx:x, cy:y, w:w, h:h, cls:best, score});
+          score = bestScore; clsId = best;
         } else {
           const base = i*C;
           x = data[base+0]; y=data[base+1]; w=data[base+2]; h=data[base+3];
@@ -330,14 +506,17 @@
             const s = data[base+4+c];
             if(s>bestScore){ bestScore=s; best=c; }
           }
-          score = bestScore;
-          if(score >= confThr) boxes.push({cx:x, cy:y, w:w, h:h, cls:best, score});
+          score = bestScore; clsId = best;
+        }
+
+        if(score >= confThr){
+          boxes.push({cx:x, cy:y, w:w, h:h, clsId, score});
         }
       }
       return boxes;
     }
 
-    // ===== Numbering =====
+    // ordine umano: alto->basso, sinistra->destra
     function sortForNumbering(canvasBoxes){
       const rowTol = Math.max(18, Math.round(cv.height * 0.03));
       return canvasBoxes.slice().sort((a,b)=>{
@@ -345,93 +524,6 @@
         if(Math.abs(dy) > rowTol) return dy;
         return a.rx - b.rx;
       });
-    }
-
-    function drawNumberBadge(x, y, n, showPct=false, pctText=""){
-      const r = 12;
-      ctx.fillStyle = "red";
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI*2);
-      ctx.fill();
-
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 14px system-ui";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(String(n), x, y);
-
-      if(showPct && pctText){
-        ctx.font = "12px system-ui";
-        ctx.textAlign = "left";
-        ctx.textBaseline = "top";
-        ctx.fillStyle = "rgba(0,0,0,0.75)";
-        const pad = 4;
-        const tw = ctx.measureText(pctText).width + pad*2;
-        const th = 16;
-        ctx.fillRect(x - r, y + r + 4, tw, th);
-        ctx.fillStyle = "#fff";
-        ctx.fillText(pctText, x - r + pad, y + r + 6);
-      }
-    }
-
-    function drawBoxesAndNumbers(bitmap, boxes, inputSize=640){
-      drawImageToCanvas(bitmap);
-
-      const scaleX = cv.width / bitmap.width;
-      const scaleY = cv.height / bitmap.height;
-      const sx = bitmap.width / inputSize;
-      const sy = bitmap.height / inputSize;
-
-      const canvasBoxes = boxes.map(b=>{
-        const x1 = (b.cx - b.w/2) * sx;
-        const y1 = (b.cy - b.h/2) * sy;
-        const x2 = (b.cx + b.w/2) * sx;
-        const y2 = (b.cy + b.h/2) * sy;
-
-        const rx = x1 * scaleX;
-        const ry = y1 * scaleY;
-        const rw = (x2-x1) * scaleX;
-        const rh = (y2-y1) * scaleY;
-
-        return { ...b, rx, ry, rw, rh };
-      });
-
-      // draw boxes
-      ctx.lineWidth = 2;
-      for(const b of canvasBoxes){
-        ctx.strokeStyle = "#00a000";
-        ctx.fillStyle = "rgba(0,160,0,0.15)";
-        ctx.fillRect(b.rx,b.ry,b.rw,b.rh);
-        ctx.strokeRect(b.rx,b.ry,b.rw,b.rh);
-      }
-
-      // numbering + store for CSV
-      const ordered = sortForNumbering(canvasBoxes);
-      const showPct = $("showPct").checked;
-
-      let start = parseInt($("startNum").value || "1", 10);
-      if(!Number.isFinite(start) || start < 1) start = 1;
-
-      lastNumbered = [];
-      let n = start;
-
-      for(const b of ordered){
-        const pct = `${(b.score*100).toFixed(0)}%`;
-        const bx = b.rx + 14;
-        const by = b.ry + 14;
-        drawNumberBadge(bx, by, n, showPct, showPct ? pct : "");
-
-        lastNumbered.push({
-          num: n,
-          cls: b.cls,
-          score: b.score,
-          rx: b.rx, ry: b.ry, rw: b.rw, rh: b.rh
-        });
-
-        n++;
-      }
-
-      updateTotal(lastNumbered.length);
     }
 
     // ===== Run inference =====
@@ -444,6 +536,10 @@
 
         setStatus("Analizzo immagine...", null);
         log("---- RUN ----");
+
+        // reset manual every new analysis
+        manualMarkers = [];
+        $("manualMode").checked = false;
 
         const confThr = +$("conf").value;
         const iouThr = +$("iou").value;
@@ -465,6 +561,7 @@
 
         const raw = decodeYOLO(out, confThr);
 
+        // x1y1x2y2 for NMS
         const boxes = raw.map(b => ({
           ...b,
           x1: b.cx - b.w/2,
@@ -476,20 +573,69 @@
         const finalBoxes = nms(boxes, iouThr);
         log("Detections raw:", raw.length, "after NMS:", finalBoxes.length);
 
-        drawBoxesAndNumbers(imgBitmap, finalBoxes, 640);
+        // convert to canvas coords
+        drawImageToCanvas(imgBitmap);
+        const inputSize = 640;
+
+        const scaleX = cv.width / imgBitmap.width;
+        const scaleY = cv.height / imgBitmap.height;
+        const sx = imgBitmap.width / inputSize;
+        const sy = imgBitmap.height / inputSize;
+
+        const canvasBoxes = finalBoxes.map(b=>{
+          const x1 = (b.cx - b.w/2) * sx;
+          const y1 = (b.cy - b.h/2) * sy;
+          const x2 = (b.cx + b.w/2) * sx;
+          const y2 = (b.cy + b.h/2) * sy;
+
+          const rx = x1 * scaleX;
+          const ry = y1 * scaleY;
+          const rw = (x2-x1) * scaleX;
+          const rh = (y2-y1) * scaleY;
+
+          const clsName = COCO80[b.clsId] || ("cls_"+b.clsId);
+          return { ...b, clsName, rx, ry, rw, rh };
+        });
+
+        // sort + numbering
+        const ordered = sortForNumbering(canvasBoxes);
+
+        let start = parseInt($("startNum").value || "1", 10);
+        if(!Number.isFinite(start) || start < 1) start = 1;
+
+        lastNumberedAi = [];
+        let n = start;
+        for(const b of ordered){
+          lastNumberedAi.push({
+            num: n,
+            clsId: b.clsId,
+            clsName: b.clsName,
+            score: b.score,
+            rx: b.rx, ry: b.ry, rw: b.rw, rh: b.rh
+          });
+          n++;
+        }
+
+        // manual numbers continue after last AI number
+        nextManualNumber = (lastNumberedAi.length ? (lastNumberedAi[lastNumberedAi.length-1].num + 1) : start);
 
         lastResultReady = true;
+        redrawAll();
+
+        setStatus(`Analisi completata ✅ Totale AI: ${lastNumberedAi.length}`, true);
         updateButtons();
-        setStatus(`Analisi completata ✅ Totale: ${lastNumbered.length}`, true);
+
       }catch(e){
         console.error(e);
         lastResultReady = false;
-        lastNumbered = [];
-        updateTotal(0);
-        updateButtons();
+        lastNumberedAi = [];
+        manualMarkers = [];
+        nextManualNumber = parseInt($("startNum").value || "1", 10) || 1;
+        redrawAll();
         setStatus("Errore analisi ❌", false);
         log("❌ ERRORE ANALISI:", e?.message || e);
         alert("Errore durante analisi: " + (e?.message || e));
+        updateButtons();
       }
     }
 
@@ -500,15 +646,18 @@
       ctx.clearRect(0,0,cv.width,cv.height);
       imageReady=false; imgBitmap=null;
       lastResultReady=false;
-      lastNumbered=[];
-      updateTotal(0);
+      lastNumberedAi=[];
+      manualMarkers=[];
+      nextManualNumber = parseInt($("startNum").value || "1", 10) || 1;
       $("imgInput").value = "";
+      $("manualMode").checked = false;
+      setStatus(modelReady ? "Modello OK ✅ Ora scegli una foto" : "Pronto", modelReady ? true : null);
       updateButtons();
-      setStatus(modelReady ? "Modello OK ✅ Ora scegli una foto" : "Pronto", modelReady);
     });
 
-    updateTotal(0);
+    // init
     updateButtons();
+    updateTotals();
   </script>
 </body>
 </html>
