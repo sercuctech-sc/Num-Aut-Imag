@@ -6,7 +6,7 @@
   <title>Num-Aut-Imag — YOLOv8n ONNX</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:16px;background:#fafafa;color:#111}
-    .card{background:#fff;border:1px solid #ddd;border-radius:14px;padding:14px;max-width:860px;margin:0 auto}
+    .card{background:#fff;border:1px solid #ddd;border-radius:14px;padding:14px;max-width:980px;margin:0 auto}
     h1{font-size:24px;margin:0 0 10px}
     button{padding:10px 12px;border-radius:12px;border:1px solid #bbb;background:#f4f4f4}
     button.primary{background:#111;color:#fff;border-color:#111}
@@ -20,6 +20,8 @@
     input[type="number"]{width:90px;padding:8px;border-radius:10px;border:1px solid #bbb}
     pre{white-space:pre-wrap;background:#0b1020;color:#e9eefc;padding:10px;border-radius:12px;max-height:260px;overflow:auto}
     label{display:flex;gap:8px;align-items:center}
+    .pill{display:inline-block;padding:6px 10px;border:1px solid #ddd;border-radius:999px;background:#f7f7f7}
+    .pill b{font-size:14px}
   </style>
 </head>
 <body>
@@ -38,6 +40,7 @@
       <input id="imgInput" type="file" accept="image/*" />
       <button id="btnRun" class="primary" disabled>2) Analizza immagine</button>
       <button id="btnClear">Pulisci</button>
+      <span class="pill">Totale: <b id="totalCount">0</b></span>
     </div>
 
     <div class="row" style="margin-top:10px">
@@ -59,9 +62,16 @@
       </label>
     </div>
 
+    <div class="row" style="margin-top:10px">
+      <button id="btnDlPng" disabled>⬇️ PNG</button>
+      <button id="btnDlJpg" disabled>⬇️ JPG</button>
+      <button id="btnDlCsv" disabled>⬇️ CSV (lista)</button>
+      <span class="small" id="dlHint">(si attivano dopo l’analisi)</span>
+    </div>
+
     <p class="small">
       Premi “Carica modello”, scegli una foto, poi “Analizza immagine”.
-      Risultato: box + numeri progressivi (da “Inizia da”).
+      Risultato: box + numeri progressivi + totale + export PNG/JPG/CSV.
     </p>
 
     <canvas id="cv"></canvas>
@@ -88,6 +98,8 @@
     let modelReady = false;
     let imageReady = false;
     let imgBitmap = null;
+    let lastResultReady = false;
+    let lastNumbered = []; // CSV export: lista già ordinata e numerata
 
     const MODEL_URL = "./yolov8n.onnx?v=" + Date.now(); // anti-cache
 
@@ -95,22 +107,76 @@
     $("conf").addEventListener("input", ()=> $("confV").textContent = (+$("conf").value).toFixed(2));
     $("iou").addEventListener("input",  ()=> $("iouV").textContent  = (+$("iou").value).toFixed(2));
 
-    function updateRunEnabled(){
+    function updateTotal(n){ $("totalCount").textContent = String(n || 0); }
+
+    function updateButtons(){
       $("btnRun").disabled = !(modelReady && imageReady);
+      $("btnDlPng").disabled = !lastResultReady;
+      $("btnDlJpg").disabled = !lastResultReady;
+      $("btnDlCsv").disabled = !lastResultReady;
     }
 
-    // ===== Canvas draw =====
+    // ===== Canvas =====
     const cv = $("cv");
     const ctx = cv.getContext("2d");
 
     function drawImageToCanvas(bitmap){
-      const maxW = 820;
+      const maxW = 920;
       const scale = Math.min(1, maxW / bitmap.width);
       cv.width  = Math.round(bitmap.width * scale);
       cv.height = Math.round(bitmap.height * scale);
       ctx.clearRect(0,0,cv.width,cv.height);
       ctx.drawImage(bitmap, 0, 0, cv.width, cv.height);
     }
+
+    // ===== Download helpers =====
+    function downloadDataUrl(dataUrl, filename){
+      const a = document.createElement("a");
+      a.href = dataUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+
+    function downloadText(text, filename){
+      const blob = new Blob([text], {type:"text/plain;charset=utf-8"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 1000);
+    }
+
+    function ts(){
+      const d = new Date();
+      const pad = n => String(n).padStart(2,"0");
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+    }
+
+    $("btnDlPng").addEventListener("click", ()=>{
+      downloadDataUrl(cv.toDataURL("image/png"), `Num-Aut-Imag_${ts()}.png`);
+    });
+
+    $("btnDlJpg").addEventListener("click", ()=>{
+      downloadDataUrl(cv.toDataURL("image/jpeg", 0.92), `Num-Aut-Imag_${ts()}.jpg`);
+    });
+
+    $("btnDlCsv").addEventListener("click", ()=>{
+      if(!lastNumbered.length){
+        alert("Nessun dato da esportare. Fai prima Analizza.");
+        return;
+      }
+      // CSV: numero,classe,confidenza,x,y,w,h (coordinate CANVAS)
+      const header = "numero,classe,confidenza,x,y,w,h\n";
+      const rows = lastNumbered.map(r =>
+        `${r.num},${r.cls},${r.score.toFixed(4)},${r.rx.toFixed(1)},${r.ry.toFixed(1)},${r.rw.toFixed(1)},${r.rh.toFixed(1)}`
+      ).join("\n");
+      downloadText(header + rows + "\n", `Num-Aut-Imag_${ts()}.csv`);
+    });
 
     // ===== Model load =====
     async function loadModel(){
@@ -128,14 +194,14 @@
 
         session = await ort.InferenceSession.create(MODEL_URL, { executionProviders: ["wasm"] });
 
-        log("✅ Modello locale (yolov8n.onnx) OK");
+        log("✅ Modello locale OK");
         log("✅ Sessione creata!");
         log("Inputs:", JSON.stringify(session.inputNames));
         log("Outputs:", JSON.stringify(session.outputNames));
 
         modelReady = true;
         setStatus("Modello OK ✅ Ora scegli una foto", true);
-        updateRunEnabled();
+        updateButtons();
 
       }catch(e){
         console.error(e);
@@ -143,37 +209,44 @@
         session = null;
         setStatus("Errore modello ❌", false);
         log("❌ ERRORE:", e?.message || e);
+        updateButtons();
       }
     }
-
     $("btnLoadModel").addEventListener("click", loadModel);
 
     // ===== Image load =====
     $("imgInput").addEventListener("change", async (ev)=>{
       try{
         const f = ev.target.files && ev.target.files[0];
-        if(!f){ imageReady=false; updateRunEnabled(); return; }
+        if(!f){ imageReady=false; updateButtons(); return; }
         imgBitmap = await createImageBitmap(f);
         imageReady = true;
+
+        // reset risultati
+        lastResultReady = false;
+        lastNumbered = [];
+        updateTotal(0);
+
         drawImageToCanvas(imgBitmap);
-        log(`Immagine caricata: ${f.name} ${imgBitmap.width}x${imgBitmap.height}`);
-        updateRunEnabled();
+        log(`Immagine: ${f.name} ${imgBitmap.width}x${imgBitmap.height}`);
+        updateButtons();
       }catch(e){
         console.error(e);
         imageReady = false;
         imgBitmap = null;
+        lastResultReady = false;
+        lastNumbered = [];
+        updateTotal(0);
         log("❌ Errore immagine:", e?.message || e);
-        updateRunEnabled();
+        updateButtons();
       }
     });
 
-    // ===== Preprocess to 640x640 NCHW float32 =====
+    // ===== Preprocess =====
     function preprocess(bitmap, size=640){
       const off = document.createElement("canvas");
       off.width = size; off.height = size;
       const octx = off.getContext("2d");
-
-      // stretch 640x640
       octx.drawImage(bitmap, 0, 0, size, size);
 
       const imgData = octx.getImageData(0,0,size,size).data;
@@ -203,7 +276,6 @@
       const areaB=(b.x2-b.x1)*(b.y2-b.y1);
       return inter/(areaA+areaB-inter+1e-9);
     }
-
     function nms(boxes, iouThr){
       boxes.sort((a,b)=>b.score-a.score);
       const out=[];
@@ -229,15 +301,13 @@
         }else{
           N = dims[1]; C = dims[2]; layout = "1NC";
         }
-      } else {
-        return [];
-      }
+      } else return [];
 
       const numClasses = C - 4;
       const boxes = [];
 
       for(let i=0;i<N;i++){
-        let x,y,w,h;
+        let x,y,w,h,score;
         if(layout==="1CN"){
           x = data[0*N + i];
           y = data[1*N + i];
@@ -249,9 +319,8 @@
             const s = data[(4+c)*N + i];
             if(s>bestScore){ bestScore=s; best=c; }
           }
-          if(bestScore >= confThr){
-            boxes.push({cx:x, cy:y, w:w, h:h, cls:best, score:bestScore});
-          }
+          score = bestScore;
+          if(score >= confThr) boxes.push({cx:x, cy:y, w:w, h:h, cls:best, score});
         } else {
           const base = i*C;
           x = data[base+0]; y=data[base+1]; w=data[base+2]; h=data[base+3];
@@ -261,15 +330,14 @@
             const s = data[base+4+c];
             if(s>bestScore){ bestScore=s; best=c; }
           }
-          if(bestScore >= confThr){
-            boxes.push({cx:x, cy:y, w:w, h:h, cls:best, score:bestScore});
-          }
+          score = bestScore;
+          if(score >= confThr) boxes.push({cx:x, cy:y, w:w, h:h, cls:best, score});
         }
       }
       return boxes;
     }
 
-    // ===== Numbering order (top->bottom, left->right) =====
+    // ===== Numbering =====
     function sortForNumbering(canvasBoxes){
       const rowTol = Math.max(18, Math.round(cv.height * 0.03));
       return canvasBoxes.slice().sort((a,b)=>{
@@ -337,19 +405,33 @@
         ctx.strokeRect(b.rx,b.ry,b.rw,b.rh);
       }
 
+      // numbering + store for CSV
       const ordered = sortForNumbering(canvasBoxes);
       const showPct = $("showPct").checked;
 
       let start = parseInt($("startNum").value || "1", 10);
       if(!Number.isFinite(start) || start < 1) start = 1;
 
+      lastNumbered = [];
       let n = start;
+
       for(const b of ordered){
         const pct = `${(b.score*100).toFixed(0)}%`;
         const bx = b.rx + 14;
         const by = b.ry + 14;
-        drawNumberBadge(bx, by, n++, showPct, showPct ? pct : "");
+        drawNumberBadge(bx, by, n, showPct, showPct ? pct : "");
+
+        lastNumbered.push({
+          num: n,
+          cls: b.cls,
+          score: b.score,
+          rx: b.rx, ry: b.ry, rw: b.rw, rh: b.rh
+        });
+
+        n++;
       }
+
+      updateTotal(lastNumbered.length);
     }
 
     // ===== Run inference =====
@@ -396,9 +478,15 @@
 
         drawBoxesAndNumbers(imgBitmap, finalBoxes, 640);
 
-        setStatus(`Analisi completata ✅ Numerati: ${finalBoxes.length}`, true);
+        lastResultReady = true;
+        updateButtons();
+        setStatus(`Analisi completata ✅ Totale: ${lastNumbered.length}`, true);
       }catch(e){
         console.error(e);
+        lastResultReady = false;
+        lastNumbered = [];
+        updateTotal(0);
+        updateButtons();
         setStatus("Errore analisi ❌", false);
         log("❌ ERRORE ANALISI:", e?.message || e);
         alert("Errore durante analisi: " + (e?.message || e));
@@ -411,12 +499,16 @@
       logEl.textContent = "";
       ctx.clearRect(0,0,cv.width,cv.height);
       imageReady=false; imgBitmap=null;
+      lastResultReady=false;
+      lastNumbered=[];
+      updateTotal(0);
       $("imgInput").value = "";
-      updateRunEnabled();
+      updateButtons();
       setStatus(modelReady ? "Modello OK ✅ Ora scegli una foto" : "Pronto", modelReady);
     });
 
-    updateRunEnabled();
+    updateTotal(0);
+    updateButtons();
   </script>
 </body>
 </html>
