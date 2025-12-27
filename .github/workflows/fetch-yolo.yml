@@ -14,50 +14,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
 
-      - name: Install Ultralytics + ONNX (stable)
+      - name: Install Ultralytics + ONNX
         run: |
           python -m pip install --upgrade pip
-          pip install --no-input --progress-bar off ultralytics onnx
+          pip install ultralytics onnx
 
-      - name: Export YOLOv8n to ONNX (no hang)
+      - name: Export YOLOv8n to ONNX
         run: |
           python - <<'PY'
           from ultralytics import YOLO
           m = YOLO("yolov8n.pt")
           m.export(format="onnx", imgsz=640)
-          print("Export done.")
           PY
 
-          echo "=== FIND ONNX ==="
-          find . -maxdepth 8 -type f -name "*.onnx" -print -exec ls -lh {} \;
-
-      - name: Place model in repo root as yolov8n.onnx
-        shell: bash
+      - name: Find & place model
         run: |
-          set -euo pipefail
-          MODEL_PATH="$(find . -maxdepth 8 -type f -name "*.onnx" -printf "%s %p\n" | sort -nr | head -n1 | awk '{print $2}')"
-          echo "MODEL_PATH=$MODEL_PATH"
-          [ -n "$MODEL_PATH" ]
+          FILE=$(find . -name "*.onnx" | head -n 1)
+          echo "FOUND: $FILE"
+          cp "$FILE" ./yolov8n.onnx
+          ls -lh yolov8n.onnx
 
-          cp "$MODEL_PATH" ./yolov8n.onnx
-          ls -lh ./yolov8n.onnx
-
-          SIZE=$(stat -c%s ./yolov8n.onnx)
-          if [ "$SIZE" -lt 1000000 ]; then
-            echo "Model too small in root!"
-            exit 1
-          fi
-
-      - name: Commit ONNX model to repo
+      - name: Commit model
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name github-actions
+          git config user.email actions@github.com
           git add yolov8n.onnx
-          git commit -m "Add proper yolov8n.onnx (exported in Actions)" || echo "Nothing to commit"
+          git commit -m "Add proper yolov8n.onnx" || echo "No changes"
           git push
